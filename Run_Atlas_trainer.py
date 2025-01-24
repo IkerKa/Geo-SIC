@@ -21,6 +21,76 @@ from networks import UnetDense
 from SitkDataSet import SitkDataset as SData
 from uEpdiff import Epdiff
 from networks import *
+import matplotlib.pyplot as plt
+
+import SimpleITK as sitk
+
+def overlay_atlas_and_image(atlas, image):
+    # Convierte los tensores a arrays de NumPy
+    atlas_np = atlas.squeeze().detach().cpu().numpy()
+    image_np = image.squeeze().cpu().numpy()
+
+    # Selecciona una sección transversal (por ejemplo, la mitad en el eje z)
+    slice_idx = atlas_np.shape[0] // 2
+    atlas_slice = atlas_np[slice_idx, :, :]
+    image_slice = image_np[slice_idx, :, :]
+
+    # Superpone las imágenes
+    plt.imshow(image_slice, cmap='gray', alpha=0.5)  # Imagen de entrenamiento (semitransparente)
+    plt.imshow(atlas_slice, cmap='hot', alpha=0.5)   # Atlas (semitransparente)
+    plt.title('Superposición: Atlas e Imagen de Entrenamiento')
+    plt.axis('off')
+    plt.show()
+
+
+
+def save_training_image(trainloader, filename):
+    # Obtén un batch de imágenes de entrenamiento
+    for batch in trainloader:
+        images, _ = batch  # Las imágenes están en el primer elemento del batch
+        break  # Solo toma el primer batch
+
+    # Selecciona la primera imagen del batch
+    image = images[0].squeeze().cpu().numpy()  # Elimina dimensiones adicionales y convierte a CPU
+
+    # Guarda la imagen en un archivo
+    image_sitk = sitk.GetImageFromArray(image)
+    sitk.WriteImage(image_sitk, filename)
+
+
+def visualize_training_image(trainloader):
+    # Obtén un batch de imágenes de entrenamiento
+    for batch in trainloader:
+        images, _ = batch  # Las imágenes están en el primer elemento del batch
+        break  # Solo toma el primer batch
+
+    # Selecciona la primera imagen del batch
+    image = images[0].squeeze().cpu().numpy()  # Elimina dimensiones adicionales y convierte a CPU
+
+    # Visualiza una sección transversal de la imagen (por ejemplo, la mitad en el eje z)
+    plt.imshow(image[image.shape[0] // 2, :, :], cmap='gray')
+    plt.title('Imagen de Entrenamiento')
+    plt.axis('off')
+    plt.show()
+
+def save_atlas(atlas, filename):
+    # Convierte el tensor de PyTorch a un array de NumPy
+    atlas_np = atlas.squeeze().detach().cpu().numpy()  # Elimina dimensiones adicionales y convierte a CPU
+    # Crea una imagen SimpleITK a partir del array de NumPy
+    atlas_image = sitk.GetImageFromArray(atlas_np)
+    # Guarda la imagen en un archivo
+    sitk.WriteImage(atlas_image, filename)
+
+
+
+def visualize_atlas(atlas):
+    # Convierte el tensor de PyTorch a un array de NumPy
+    atlas_np = atlas.squeeze().detach().cpu().numpy()
+    # Visualiza una sección transversal del atlas
+    plt.imshow(atlas_np[atlas_np.shape[0] // 2, :, :], cmap='gray')
+    plt.title('Atlas')
+    plt.axis('off')
+    plt.show()
 
 
 def get_device():
@@ -109,6 +179,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     for epoch in range(para.solver.epochs):
         net.train()
         print('epoch:', epoch)
+
         for j, tar_bch in enumerate(trainloader):
             b, c, w, h, l = tar_bch[0].shape
             optimizer.zero_grad()
@@ -124,13 +195,19 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
 
             atlas_bch = atlas_bch.to(dev).float() 
             tar_bch_img = tar_bch[0].to(dev).float() 
-            momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True) 
+            
+            _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters
+            # print(res)
+            # latent_feat, momentum, _ = res
+            print("Network output (momentum) shape:", momentum.shape)
+            print("Network output (latent_feat) shape:", latent_feat.shape)
             momentum = momentum.permute(0, 4, 3, 2, 1)
+            # print(momentum.shape)
             identity = get_grid2(xDim, dev).permute([0, 4, 3, 2, 1])  
             epd = Epdiff(dev, (reduced_xDim, reduced_yDim, reduced_zDim), (xDim, yDim, zDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
 
             for b_id in range(b):
-                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h , l, 3))
+                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, l, 3))
                 velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h , l, 3)  
                 reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
                 num_steps = para.solver.Euler_steps
@@ -153,7 +230,15 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             opt.step()
             opt.zero_grad()
 
+            
         print('Total training loss:', total)
+    
+    print('Finished Training')
+    #save final atlas
+    save_atlas(atlas, 'final_atlas.nii.gz')
+    return atlas
+    
+    
 
 def main():
 
@@ -163,6 +248,9 @@ def main():
     json_file = 'train_json'
     keyword = 'train'
     xDim, yDim, zDim= load_and_preprocess_data(data_dir, json_file, keyword)
+    
+  
+    
     print (xDim, yDim, zDim)
     dataset = SData('./train_json.json', "train")
     ave_data = SData('./train_json.json', 'train')
@@ -171,7 +259,23 @@ def main():
     combined_loader = zip(trainloader, aveloader )
     net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
     print (xDim, yDim, zDim)
-    train_network(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16,16, xDim, yDim, zDim, dev)
+    
+    for batch in trainloader:
+        images, _ = batch
+        break
+    image = images[0]
+    
+    #plot the image
+    visualize_training_image(trainloader)
+    
+    
+    
+    atlas = train_network(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16,16, xDim, yDim, zDim, dev)
+    
+    visualize_atlas(atlas)
+    
+    overlay_atlas_and_image(atlas, image)
+        
 
 if __name__ == "__main__":
     main()

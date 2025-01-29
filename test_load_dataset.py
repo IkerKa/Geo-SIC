@@ -1,3 +1,4 @@
+import io
 from os import PathLike
 from pathlib import Path
 import numpy as np
@@ -43,7 +44,7 @@ from plotly.offline import iplot, init_notebook_mode
 # Function to plot a stroke-based drawing --> Each stroke is a (dx, dy, pen_lift) triplet 
 # where dx and dy are the change in x and y coordinates and pen_lift is a binary value indicating whether the pen is lifted or not.
 # Function to plot a stroke-based drawing
-def plot_sketch(stroke_data):
+def plot_sketch(stroke_data, idx = None, path=None):
     """Plots a single sketch from the dataset"""
     fig, ax = plt.subplots()
     x, y = 0, 0  # Starting position
@@ -61,7 +62,19 @@ def plot_sketch(stroke_data):
             
     ax.set_aspect('equal')
     plt.gca().invert_yaxis()  # Invert Y-axis for correct orientation
-    plt.show()
+    # plt.show()
+
+    #save the image to a file
+    if idx is not None:
+        # plt.savefig(f"{path}/sketch_{idx}.png")
+        # Convert the plot to a PIL image and save it
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+        img = Image.open(buf)
+        img.save(f"{path}/sketch_{idx}.png")
+        buf.close()
+
 
 
 
@@ -82,12 +95,14 @@ def main():
     # Create a new dataset with the first 10 triangles
     new_data = train_data[:10]
 
-    # Save the new dataset
-    np.savez('datasets/triangles.small.npz', train=new_data)
 
-    #see the images
+
+    #see the images and store them to make a dataset
+    #triangles dir
+    os.makedirs("datasets/triangle_sketches", exist_ok=True)
     for i in range(10):
-        plot_sketch(new_data[i])
+        plot_sketch(new_data[i], i, path="datasets/triangle_sketches")
+
 
 
 if __name__ == '__main__':

@@ -124,6 +124,24 @@ def load_and_preprocess_data(data_dir, json_file, keyword):
     xDim, yDim, zDim = temp_scan.shape
     return xDim, yDim, zDim
 
+##################2D data loading#######################
+def load_and_preprocess_data2D(data_dir, json_file, keyword):
+    readfilename = f'{data_dir}/{json_file}.json'
+    print(readfilename)
+    try:
+        with open(readfilename, 'r') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f'Error loading JSON data: {e}')
+        return None
+    
+    outputs = []
+    temp_scan = sitk.GetArrayFromImage(sitk.ReadImage(f'{data_dir}/datasets/triangle_sketches/{data[keyword][0]["image"]}'))
+    print(temp_scan.shape)
+    xDim, yDim, _ = temp_scan.shape
+    return xDim, yDim
+
+
 
 def initialize_network_optimizer(xDim, yDim, zDim, para, dev):
     net = UnetDense(inshape=(xDim, yDim, zDim),
@@ -276,9 +294,43 @@ def main():
     
     overlay_atlas_and_image(atlas, image)
         
+def main2D():
 
+    dev = get_device()
+    para = read_yaml('./parameters.yml')
+    data_dir = '.'
+    json_file = 'train_json'
+    keyword = 'train'
+    xDim, yDim = load_and_preprocess_data2D(data_dir, json_file, keyword)
+    
+  
+    
+    # print (xDim, yDim )
+    dataset = SData('./train_json.json', "train", "./datasets/triangle_sketches/")
+    # print(dataset)
+    ave_data = SData('./train_json.json', 'train', "./datasets/triangle_sketches/")
+
+    #print the number of images
+    print(len(dataset))
+    trainloader = DataLoader(dataset, batch_size= para.solver.batch_size, shuffle=True)
+    aveloader = DataLoader(ave_data, batch_size= 1 , shuffle = False)
+    combined_loader = zip(trainloader, aveloader )
+    # TODO -> Change the network to 2D
+    # net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
+    # print (xDim, yDim)
+
+    print("Loading the network")
+    print("Trainloader:", trainloader)
+    for batch in trainloader:
+        print(batch)
+        images, _ = batch
+        break
+    image = images[0]
+    
+    #plot the image
+    visualize_training_image(trainloader)
 if __name__ == "__main__":
-    main()
+    main2D()
 
 
 

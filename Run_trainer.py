@@ -27,26 +27,29 @@ import lagomorph as lm
 import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 from plotly.offline import iplot
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.offline import iplot, init_notebook_mode
 
 
 
 def visualize_3d_volume(volume):
     """
-    Plotly  a 3D volume.
+    Visualizes a 3D volume using Plotly.
     """
     x, y, z = np.mgrid[:volume.shape[0], :volume.shape[1], :volume.shape[2]]
-    fig = go.Figure(data=go.Volume(
-        x=x.flatten(),
-        y=y.flatten(),
-        z=z.flatten(),
-        value=volume.flatten(),
-        isomin=0.1,
-        isomax=0.8,
-        opacity=0.1,
-        surface_count=17,
-    ))
-    iplot.offline(fig)
 
+    fig = go.Figure(data=go.Volume(
+    x=x.flatten(),
+    y=y.flatten(),
+    z=z.flatten(),
+    value=volume.flatten(),
+    isomin=np.min(volume) + 0.1,  # Auto-adjusted min
+    isomax=np.max(volume) - 0.1,  # Auto-adjusted max
+    opacity=0.3,  # Increase opacity for better visibility
+    surface_count=10,  # Reduce surfaces for better performance
+    ))
+    fig.show()
 
 
 
@@ -200,6 +203,19 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
     """
     Trains the atlas building neural network and classifier.
     """
+
+    print(f"Training on {len(trainloader.dataset)} images")
+    print(f"Validation on {len(aveloader.dataset)} images")
+    print(f"Using device: {dev}")
+    print(f"Network architecture: {net}")
+    print(f"Classifier architecture: {clfer}")
+    print(f"Number of epochs: {para.solver.epochs}")
+    print(f"Batch size: {para.solver.batch_size}")
+    print(f"Learning rate: {para.solver.lr}")
+    print(f"Atlas learning rate: {para.solver.atlas_lr}")
+    print(f"Pretrain epochs: {para.model.pretrain_epoch}")
+    print(f"Loss function: {para.model.loss}")
+    print(f"Optimizer: {para.model.optimizer}")
 
     losses = []
     running_loss = 0

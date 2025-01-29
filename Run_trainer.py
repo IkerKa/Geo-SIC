@@ -24,6 +24,92 @@ from uEpdiff import Epdiff
 from networks import *
 from classifiers import *
 import lagomorph as lm 
+import matplotlib.pyplot as plt
+import plotly.graph_objs as go
+from plotly.offline import iplot
+
+
+
+def visualize_3d_volume(volume):
+    """
+    Plotly  a 3D volume.
+    """
+    x, y, z = np.mgrid[:volume.shape[0], :volume.shape[1], :volume.shape[2]]
+    fig = go.Figure(data=go.Volume(
+        x=x.flatten(),
+        y=y.flatten(),
+        z=z.flatten(),
+        value=volume.flatten(),
+        isomin=0.1,
+        isomax=0.8,
+        opacity=0.1,
+        surface_count=17,
+    ))
+    iplot.offline(fig)
+
+
+
+
+def visualize_images(atlas, target, deformed, zDim):
+    """
+    Visualize the atlas, target, and deformed images.
+    """
+    plt.figure(figsize=(15, 5))
+    
+    # Atlas, target, and deformed images
+    plt.subplot(1, 3, 1)
+    plt.imshow(atlas[0, 0, :, :, zDim//2].cpu().detach().numpy(), cmap='gray')
+    plt.title('Atlas')
+    plt.axis('off')
+    
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(target[0, 0, :, :, zDim//2].cpu().detach().numpy(), cmap='gray')
+    plt.title('Target')
+    plt.axis('off')
+    
+    plt.subplot(1, 3, 3)
+    plt.imshow(deformed[0, 0, :, :, zDim//2].cpu().detach().numpy(), cmap='gray')
+    plt.title('Deformed')
+    plt.axis('off')
+    
+    plt.show()
+
+
+def save_image_as_nifti(image, filename):
+    """
+    Guarda una imagen en formato NIfTI.
+    """
+    image_np = image.cpu().detach().numpy()
+    image_sitk = sitk.GetImageFromArray(image_np)
+    sitk.WriteImage(image_sitk, filename)
+
+def visualize_deformation_field(deformation_field, zDim):
+    """
+    Visualize the deformation field (in 2D, i.e., x and y directions).
+    """
+    plt.figure(figsize=(10, 10))
+    plt.quiver(deformation_field[0, :, :, zDim//2, 0].cpu().detach().numpy(),
+               deformation_field[0, :, :, zDim//2, 1].cpu().detach().numpy())
+    plt.title('Deformation Field')
+    plt.axis('off')
+    plt.show()
+
+
+
+
+def plot_loss(losses):
+    """
+    Loss plot.
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(losses, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Time')
+    plt.legend()
+    plt.show()
+
 
 
 def get_device():
@@ -114,6 +200,8 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
     """
     Trains the atlas building neural network and classifier.
     """
+
+    losses = []
     running_loss = 0
     total = 0
     ''' Define fluid paramerts if using vector-momenta to shoot forward'''
@@ -215,6 +303,23 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
             opt.zero_grad()
 
         print('Total training loss:', total)
+        losses.append(total)
+
+        # Visualize the atlas, target, and deformed images
+        visualize_images(atlas_bch, tar_bch_img, pred[0], zDim)
+
+        # Visualize the deformation field
+        visualize_deformation_field(pred[1], zDim)
+
+    # Plot the training loss over epochs
+    plot_loss(losses)
+
+    # Save the trained atlas as a NIfTI file
+    save_image_as_nifti(atlas_bch, 'atlas.nii.gz')
+
+    #3D visualization of the atlas
+    visualize_3d_volume(atlas_bch[0, 0, :, :, :].cpu().detach().numpy())
+
 
 
 def main():
@@ -235,6 +340,7 @@ def main():
     net, clfer, criterion, criterion_clf, num_classes, optimizer, scheduler = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
 
     train_network(trainloader, aveloader, net, clfer, para, criterion, criterion_clf, num_classes, optimizer, scheduler, NCC, 'l2', 0.5, 0.5, 0.2, 16, 16, 16, xDim, yDim, zDim, dev, "VecMome")
+    
 
 
 if __name__ == "__main__":

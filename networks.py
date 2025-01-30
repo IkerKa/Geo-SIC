@@ -158,6 +158,8 @@ class Unet(nn.Module):
             if not self.half_res or level < (self.nb_levels - 2):
 
                 x = self.upsampling[level](x)
+                # x = F.interpolate(x, size=x_history[-1].shape[2:], mode="trilinear", align_corners=True)
+
                 # print ('shape1:', x.shape)
                 # print ('shape2:', x_history.pop().shape)
                 x = torch.cat([x, x_history.pop()], dim=1)
@@ -167,7 +169,7 @@ class Unet(nn.Module):
         for conv in self.remaining:
             x = conv(x)
         latent = self.pooling[0](self.pooling[0](latent))
-        # print(latent.shape)
+        print(latent.shape)
         return x, latent
 
 

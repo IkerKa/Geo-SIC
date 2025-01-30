@@ -93,6 +93,7 @@ def save_atlas(atlas, filename):
 def visualize_atlas(atlas):
     # Convierte el tensor de PyTorch a un array de NumPy
     atlas_np = atlas.squeeze().detach().cpu().numpy()
+
     # Visualiza una sección transversal del atlas
     plt.imshow(atlas_np[atlas_np.shape[0] // 2, :, :], cmap='gray')
     plt.title('Atlas')
@@ -227,6 +228,10 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
 
             atlas_bch = atlas_bch.to(dev).float() 
             tar_bch_img = tar_bch[0].to(dev).float() 
+
+            print("atlas_bch shape:", atlas_bch.shape)
+            print("tar_bch_img shape:", tar_bch_img.shape)
+
             
             try:
                 _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters

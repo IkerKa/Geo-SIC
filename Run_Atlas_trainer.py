@@ -62,10 +62,17 @@ def visualize_training_image(trainloader):
     # Obtén un batch de imágenes de entrenamiento
     for batch in trainloader:
         images, _ = batch  # Las imágenes están en el primer elemento del batch
+        print("Batch shape:", images.shape)
         break  # Solo toma el primer batch
 
     # Selecciona la primera imagen del batch
     image = images[0].squeeze().cpu().numpy()  # Elimina dimensiones adicionales y convierte a CPU
+
+    #añade una dimension para que sea 3D
+    # image = image[np.newaxis, :, :]
+
+
+    print('(PLOT) Dimensiones de la imagen de entrenamiento:', image.shape)
 
     # Visualiza una sección transversal de la imagen (por ejemplo, la mitad en el eje z)
     plt.imshow(image[image.shape[0] // 2, :, :], cmap='gray')
@@ -121,7 +128,9 @@ def load_and_preprocess_data(data_dir, json_file, keyword):
         return None
     outputs = []
     temp_scan = sitk.GetArrayFromImage(sitk.ReadImage(f'{data_dir}/{data[keyword][0]["image"]}'))
-    xDim, yDim, zDim = temp_scan.shape
+    print("temp_scan shape:", temp_scan.shape)
+    temp_scan = temp_scan.astype(np.float32)
+    xDim, yDim,  zDim = temp_scan.shape
     return xDim, yDim, zDim
 
 ##################2D data loading#######################
@@ -191,6 +200,11 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     # Get an initialization of the atlas
     for ave_scan in trainloader:
         atlas, temp = ave_scan
+        #plot the atlas
+        # visualize_atlas(atlas)
+        
+
+    atlas = atlas.float()
     atlas.requires_grad=True
     opt = optim.Adam([atlas], lr=para.solver.atlas_lr) 
 
@@ -214,7 +228,11 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             atlas_bch = atlas_bch.to(dev).float() 
             tar_bch_img = tar_bch[0].to(dev).float() 
             
-            _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters
+            try:
+                _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters
+            except RuntimeError as e:
+                print(f"Error during network forward pass: {e}")
+                continue
             # print(res)
             # latent_feat, momentum, _ = res
             print("Network output (momentum) shape:", momentum.shape)
@@ -293,44 +311,9 @@ def main():
     visualize_atlas(atlas)
     
     overlay_atlas_and_image(atlas, image)
-        
-def main2D():
-
-    dev = get_device()
-    para = read_yaml('./parameters.yml')
-    data_dir = '.'
-    json_file = 'train_json'
-    keyword = 'train'
-    xDim, yDim = load_and_preprocess_data2D(data_dir, json_file, keyword)
-    
   
-    
-    # print (xDim, yDim )
-    dataset = SData('./train_json.json', "train", "./datasets/triangle_sketches/")
-    # print(dataset)
-    ave_data = SData('./train_json.json', 'train', "./datasets/triangle_sketches/")
-
-    #print the number of images
-    print(len(dataset))
-    trainloader = DataLoader(dataset, batch_size= para.solver.batch_size, shuffle=True)
-    aveloader = DataLoader(ave_data, batch_size= 1 , shuffle = False)
-    combined_loader = zip(trainloader, aveloader )
-    # TODO -> Change the network to 2D
-    # net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
-    # print (xDim, yDim)
-
-    print("Loading the network")
-    print("Trainloader:", trainloader)
-    for batch in trainloader:
-        print(batch)
-        images, _ = batch
-        break
-    image = images[0]
-    
-    #plot the image
-    visualize_training_image(trainloader)
 if __name__ == "__main__":
-    main2D()
+    main()
 
 
 

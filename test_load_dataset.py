@@ -62,18 +62,47 @@ def plot_sketch(stroke_data, idx = None, path=None):
             
     ax.set_aspect('equal')
     plt.gca().invert_yaxis()  # Invert Y-axis for correct orientation
-    # plt.show()
 
-    #save the image to a file
-    if idx is not None:
-        # plt.savefig(f"{path}/sketch_{idx}.png")
-        # Convert the plot to a PIL image and save it
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        img = Image.open(buf)
-        img.save(f"{path}/sketch_{idx}.png")
-        buf.close()
+    # Convert the plot to a numpy array
+    fig.canvas.draw()
+    image = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+    image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    image = np.mean(image, axis=2).astype(np.uint8)  # Take the average of the RGB channels
+    plt.close(fig)
+    
+    return image
+
+def convert2DtoMHD(image, image_name):
+    """_summary_
+
+    Args:
+        image (_type_): _description_
+    """
+
+    #from a PNG image of 2 dimensions, convert it into an MHD version where the third dimension is 1 (because it is a 2D image)
+    # Convert the 2D image to a numpy array
+    image_array = np.array(image)
+
+    # Add a third dimension to the array
+    # image_array = image_array[:, :, np.newaxis]
+    image_array = np.expand_dims(image_array, axis=2)
+
+    #repeat the image 100 times in the third dimension
+    image_array = np.repeat(image_array, 10, axis=2)
+
+
+    # Convert the numpy array to a SimpleITK image
+    itk_image = sitk.GetImageFromArray(image_array)
+
+    itk_image.SetSpacing([1.0, 1.0, 1.0])
+
+    print(f"Image shape: {itk_image.GetSize()}")
+
+    # Save the image as an MHD file
+    path = './datasets/triangle_sketches'
+    sitk.WriteImage(itk_image, os.path.join(path, f'{image_name}.mhd'))
+
+    #print the dimensions of the image
 
 
 
@@ -101,7 +130,8 @@ def main():
     #triangles dir
     os.makedirs("datasets/triangle_sketches", exist_ok=True)
     for i in range(10):
-        plot_sketch(new_data[i], i, path="datasets/triangle_sketches")
+        image = plot_sketch(new_data[i], i, path="datasets/triangle_sketches")
+        convert2DtoMHD(image, "triangle_"+str(i))
 
 
 

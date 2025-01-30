@@ -7,6 +7,7 @@ import json
 class SitkDataset(Dataset):
     def __init__(self, json_file, keyword, path = None, transform=None):
         self.keyword = keyword
+        self.path = None
         if path is not None:
             self.path = path
         with open(json_file, 'r') as f:

@@ -14,7 +14,7 @@ dictout = {keyword:[]}
 for i in range(0, 10):
 
     smalldict = {}
-    filename = 'sketch_' + str(i) + '.png'
+    filename = 'datasets/triangle_sketches/triangle_' + str(i) + '.mhd'
 
     smalldict['image'] = filename
     smalldict['label'] = df_n[i][0]

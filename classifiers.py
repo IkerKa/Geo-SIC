@@ -16,8 +16,8 @@ class Flexi3DCNN(nn.Module):
                 conv_layer = nn.Conv3d(conv_channels[i-1], conv_channels[i], kernel_size=conv_kernel_sizes[i], padding=1)
             self.conv_layers.append(conv_layer)
 
-        # Replace fixed pooling with adaptive pooling to handle small spatial sizes
-        self.pool = nn.AdaptiveAvgPool3d((4, 4, 4))  # Output fixed spatial size (4x4x4)
+        
+        self.pool = nn.AdaptiveAvgPool3d((4, 4, 4))
 
         # Fully connected layers
         self.fc1 = nn.Linear(conv_channels[-1] * 4 * 4 * 4, 128)

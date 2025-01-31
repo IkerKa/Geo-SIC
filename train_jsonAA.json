@@ -1,0 +1,1 @@
+{"train": [{"image": "datasets/apple/mhd/image_0.mhd", "label": "0"}, {"image": "datasets/apple/mhd/image_1.mhd", "label": "0"}, {"image": "datasets/apple/mhd/image_2.mhd", "label": "0"}, {"image": "datasets/apple/mhd/image_3.mhd", "label": "0"}, {"image": "datasets/apple/mhd/image_4.mhd", "label": "1"}]}

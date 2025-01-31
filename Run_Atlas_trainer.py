@@ -25,6 +25,22 @@ import matplotlib.pyplot as plt
 
 import SimpleITK as sitk
 
+def read_atlas():
+    try:
+        atlas_path = './atlas.nii.gz'
+        final_atlas_path = './final_atlas.nii.gz'
+        atlas = sitk.ReadImage(atlas_path)
+        final_atlas = sitk.ReadImage(final_atlas_path)
+        #visualize the atlas
+        atlas_np = sitk.GetArrayFromImage(atlas)
+        final_atlas_np = sitk.GetArrayFromImage(final_atlas)
+        visualize_atlas(torch.tensor(atlas_np))
+        visualize_atlas(torch.tensor(final_atlas_np))
+    except Exception as e:
+        print(f'Error reading atlas: {e}')
+        return None
+    
+
 def overlay_atlas_and_image(atlas, image):
     # Convierte los tensores a arrays de NumPy
     atlas_np = atlas.squeeze().detach().cpu().numpy()
@@ -73,6 +89,15 @@ def visualize_training_image(trainloader):
 
 
     print('(PLOT) Dimensiones de la imagen de entrenamiento:', image.shape)
+
+    #mostrar mas informacion de la imagen leida
+    print('Tipo de datos:', image.dtype)
+    print('Valor mínimo:', image.min())
+    print('Valor máximo:', image.max())
+    print('Valor promedio:', image.mean())
+    print('Desviación estándar:', image.std())
+
+
 
     # Visualiza una sección transversal de la imagen (por ejemplo, la mitad en el eje z)
     plt.imshow(image[image.shape[0] // 2, :, :], cmap='gray')
@@ -201,6 +226,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     # Get an initialization of the atlas
     for ave_scan in trainloader:
         atlas, temp = ave_scan
+        save_atlas(atlas, 'atlas.nii.gz')
         #plot the atlas
         # visualize_atlas(atlas)
         
@@ -291,7 +317,10 @@ def main():
     xDim, yDim, zDim= load_and_preprocess_data(data_dir, json_file, keyword)
     
   
-    
+    read_atlas()
+
+    input("Press Enter to continue...")
+
     print (xDim, yDim, zDim)
     dataset = SData('./train_json.json', "train")
     ave_data = SData('./train_json.json', 'train')

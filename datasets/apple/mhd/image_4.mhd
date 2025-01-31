@@ -9,5 +9,5 @@ CenterOfRotation = 0 0 0
 AnatomicalOrientation = RAI
 ElementSpacing = 1 1 1
 DimSize = 28 28 28
-ElementType = MET_UCHAR
+ElementType = MET_FLOAT
 ElementDataFile = image_4.raw

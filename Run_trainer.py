@@ -253,7 +253,7 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
             pred = net(atlas_bch, tar_bch_img, registration=True, shooting = flag) 
 
             # Train image classifier with feature fusion strategy using a specified weighting parameter, this network will not be updated unless the atlas building is pretrained
-            cl_pred = clfer (tar_bch_img ,pred[2], weight_latent)
+            cl_pred = clfer(tar_bch_img ,pred[2], weight_latent)
 
             # Create a tensor from the ground truth label, one-hot for multi-classes
             tar_bch_lbl = F.one_hot(torch.tensor(int(tar_bch[1][0])), num_classes).to(dev).float()

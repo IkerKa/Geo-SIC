@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class Flexi3DCNN(nn.Module):
     def __init__(self, in_channels, conv_channels, conv_kernel_sizes, num_classes, activation):
@@ -10,35 +11,33 @@ class Flexi3DCNN(nn.Module):
         self.conv_layers = nn.ModuleList()
         for i in range(self.num_conv_layers):
             if i == 0:
-                conv_layer = nn.Conv3d(in_channels, conv_channels[i], kernel_size=conv_kernel_sizes[i], stride=1, padding=1)
+                conv_layer = nn.Conv3d(in_channels, conv_channels[i], kernel_size=conv_kernel_sizes[i], padding=1)
             else:
-                conv_layer = nn.Conv3d(conv_channels[i-1], conv_channels[i], kernel_size=conv_kernel_sizes[i], stride=1, padding=1)
+                conv_layer = nn.Conv3d(conv_channels[i-1], conv_channels[i], kernel_size=conv_kernel_sizes[i], padding=1)
             self.conv_layers.append(conv_layer)
 
-        # Pooling layer
-        self.pool = nn.MaxPool3d(kernel_size=2, stride=2)
+        # Replace fixed pooling with adaptive pooling to handle small spatial sizes
+        self.pool = nn.AdaptiveAvgPool3d((4, 4, 4))  # Output fixed spatial size (4x4x4)
 
         # Fully connected layers
         self.fc1 = nn.Linear(conv_channels[-1] * 4 * 4 * 4, 128)
         self.fc2 = nn.Linear(128, num_classes)
 
         # Activation function
-        if activation == 'ReLU':
-            self.act = nn.ReLU()
-        elif activation == 'LeakyReLU':
-            self.act = nn.LeakyReLU()
-        else:
-            raise ValueError("Unsupported activation function.")
+        self.act = nn.ReLU() if activation == 'ReLU' else nn.LeakyReLU()
 
     def forward(self, x, latent_f, weight_f):
-        # Convolutional layers
+        # Process input through convolutional layers
         for conv_layer in self.conv_layers:
-            x = self.act(self.pool(conv_layer(x)))
-        x = weight_f*latent_f + x 
+            x = self.act(conv_layer(x))  # Apply convolution + activation
+            x = self.pool(x)  # Use adaptive pooling to ensure size stability
+
+        # Ensure latent_f matches spatial dimensions of x
+        latent_f = F.interpolate(latent_f, size=x.shape[2:], mode='trilinear', align_corners=False)
+        x = weight_f * latent_f + x  # Element-wise addition
+
+        # Flatten and pass through FC layers
         x = torch.flatten(x, 1)
-        # Fully connected layers
         x = self.act(self.fc1(x))
         x = self.fc2(x)
-
         return x
-

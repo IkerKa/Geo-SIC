@@ -141,7 +141,6 @@ class Unet(nn.Module):
         self.final_nf = prev_nf
 
     def forward(self, x):
-
         # encoder forward pass
         x_history = [x]
         for level, convs in enumerate(self.encoder):
@@ -150,28 +149,28 @@ class Unet(nn.Module):
             x_history.append(x)
             x = self.pooling[level](x)
         latent = x
+
+        #upsample to 128x128x128
+
         # decoder forward pass with upsampling and concatenation
-        # print (x_history[5].shape)
         for level, convs in enumerate(self.decoder):
             for conv in convs:
                 x = conv(x)
             if not self.half_res or level < (self.nb_levels - 2):
-
                 x = self.upsampling[level](x)
-                # x = F.interpolate(x, size=x_history[-1].shape[2:], mode="trilinear", align_corners=True)
-
-                # print ('shape1:', x.shape)
-                # print ('shape2:', x_history.pop().shape)
+                # Ensure dimensions are valid before interpolation
+                target_size = x_history[-1].shape[2:]
+                if all(dim > 0 for dim in target_size):
+                    x = F.interpolate(x, size=target_size, mode="trilinear", align_corners=True)
+                print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
                 x = torch.cat([x, x_history.pop()], dim=1)
-                
 
         # remaining convs at full resolution
         for conv in self.remaining:
             x = conv(x)
-        latent = self.pooling[0](self.pooling[0](latent))
+        # latent = self.pooling[0](self.pooling[0](latent)) <-- have to comment this line for the 2D dataset, redundant pooling (uncomment if getting errors with brainsss)
         print(latent.shape)
         return x, latent
-
 
 class UnetDense(LoadableModel):
     """

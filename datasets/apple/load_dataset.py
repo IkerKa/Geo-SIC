@@ -23,6 +23,10 @@ def convert_to_mhd(data, output_path, num_samples):
         image_3d = data[idx].reshape((1, 28, 28))  # Adding an extra dimension
         #convert the depth to 28
         image_3d = np.repeat(image_3d, 28, axis=0)
+
+
+        image_3d = image_3d.astype(np.float32)
+
         sitk_image = sitk.GetImageFromArray(image_3d)
         sitk.WriteImage(sitk_image, f"{output_path}/image_{i}.mhd")
         print(f"Image {i} saved as MHD")

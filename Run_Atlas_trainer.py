@@ -2,29 +2,31 @@ from os import PathLike
 from pathlib import Path
 from signal import pause
 import numpy as np
-import SimpleITK as sitk
+import SimpleITK as sitk # type: ignore
 import os, glob
 import json
 import subprocess
 import sys
 from PIL import Image
-from torch.optim.lr_scheduler import CosineAnnealingLR,CosineAnnealingWarmRestarts,StepLR
-from torch.utils.data import TensorDataset, DataLoader
-import torch
-import torch.nn as nn 
-import torch.nn.functional as F 
-import torch.optim as optim
-from easydict import EasyDict as edict
-import random
+from torch.optim.lr_scheduler import CosineAnnealingLR,CosineAnnealingWarmRestarts,StepLR # type: ignore
+from torch.utils.data import TensorDataset, DataLoader # type: ignore
+import torch # type: ignore
+import torch.nn as nn  # type: ignore
+import torch.nn.functional as F  # type: ignore
+import torch.optim as optim      # type: ignore
+from easydict import EasyDict as edict  # type: ignore
+import nibabel as nib
+import random 
 import yaml
 from losses import NCC, MSE, Grad
 from networks import UnetDense  
 from SitkDataSet import SitkDataset as SData
 from uEpdiff import Epdiff
 from networks import *
-import matplotlib.pyplot as plt
+import argparse
+import matplotlib.pyplot as plt # type: ignore
 
-import SimpleITK as sitk
+import SimpleITK as sitk # type: ignore
 
 def read_atlas():
     try:
@@ -74,6 +76,17 @@ def save_training_image(trainloader, filename):
     image_sitk = sitk.GetImageFromArray(image)
     sitk.WriteImage(image_sitk, filename)
 
+
+#function to obtain the average atlas from a set of images in order to compare it with the final atlas
+def get_average_atlas(aveloader):
+    # Get the average atlas from a set of images
+    total = 0
+    for batch in aveloader:
+        images, _ = batch  # Las imágenes están en el primer elemento del batch
+        total += images
+    average_atlas = total / len(aveloader)
+    visualize_atlas(average_atlas)
+    return
 
 def visualize_training_image(trainloader):
     # Obtén un batch de imágenes de entrenamiento
@@ -125,6 +138,19 @@ def save_atlas(atlas, filename):
     # Guarda la imagen en un archivo
     sitk.WriteImage(atlas_image, filename)
 
+def visualize_atlas_training(atlas_tensor, epoch, save_path='atlas_snapshots'):
+    os.makedirs(save_path, exist_ok=True)
+    # Detach, move to CPU, and convert to numpy
+    atlas_np = atlas_tensor.detach().cpu().numpy()
+    # Assuming shape: [batch, channel, x, y, z]
+    # Example: Save middle slice of the first channel and batch
+    slice_idx = atlas_np.shape[2] // 2
+    plt.imshow(atlas_np[0, 0, slice_idx, :, :], cmap='gray')
+    plt.title(f'Atlas Epoch {epoch}')
+    plt.savefig(f'{save_path}/epoch_{epoch}.png')
+    plt.close()
+    # Optionally save as NIfTI
+    nib.save(nib.Nifti1Image(atlas_np[0, 0], np.eye(4)), f'{save_path}/epoch_{epoch}.nii.gz')
 
 
 def visualize_atlas(atlas):
@@ -161,6 +187,7 @@ def load_and_preprocess_data(data_dir, json_file, keyword):
     try:
         with open(readfilename, 'r') as f:
             data = json.load(f)
+            # print(data)
     except Exception as e:
         print(f'Error loading JSON data: {e}')
         return None
@@ -238,23 +265,28 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     # Get an initialization of the atlas
     for ave_scan in trainloader:
         atlas, temp = ave_scan
+        atlas = atlas.float().to(dev)
         print("Atlas shape:", atlas.shape)
         
         break  #<---they only want the first one but didn't use the break statement 
-        
-    pause()
 
-    atlas = atlas.float()
-    atlas.requires_grad=True
-    opt = optim.Adam([atlas], lr=para.solver.atlas_lr) 
-
+    
+    atlas = torch.nn.Parameter(atlas, requires_grad=True) 
+    opt = optim.Adam([atlas], lr=para.solver.atlas_lr)
+    atlas_history = []
     for epoch in range(para.solver.epochs):
         net.train()
         print('epoch:', epoch)
 
+        visualize_atlas_training(atlas, epoch)
+        atlas_history.append(atlas.detach().clone().cpu().numpy())
+
         for j, tar_bch in enumerate(trainloader):
+
+            print('batch:', j)
             b, c, w, h, l = tar_bch[0].shape
             optimizer.zero_grad()
+            opt.zero_grad()
             phiinv_bch = torch.zeros(b, w, h, l, 3).to(dev)
             reg_save = torch.zeros(b, w, h, l, 3).to(dev)
             
@@ -266,21 +298,20 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
                 atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h, l)
 
             atlas_bch = atlas_bch.to(dev).float() 
+            # atlas_bch.requires_grad = True
             tar_bch_img = tar_bch[0].to(dev).float() 
 
-            print("atlas_bch shape:", atlas_bch.shape)
-            print("tar_bch_img shape:", tar_bch_img.shape)
+            # print("atlas_bch shape:", atlas_bch.shape)
+            # print("tar_bch_img shape:", tar_bch_img.shape)
 
             
-            try:
-                _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters
-            except RuntimeError as e:
-                print(f"Error during network forward pass: {e}")
-                continue
+            
+            _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters
+            
             # print(res)
             # latent_feat, momentum, _ = res
-            print("Network output (momentum) shape:", momentum.shape)
-            print("Network output (latent_feat) shape:", latent_feat.shape)
+            # print("Network output (momentum) shape:", momentum.shape)
+            # print("Network output (latent_feat) shape:", latent_feat.shape)
             momentum = momentum.permute(0, 4, 3, 2, 1)
             # print(momentum.shape)
             identity = get_grid2(xDim, dev).permute([0, 4, 3, 2, 1])  
@@ -308,9 +339,16 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             total += running_loss
             running_loss = 0.0
 
-        if epoch > para.model.pretrain_epoch:
+            print("atlas_bch.requires_grad:", atlas_bch.requires_grad)  # Should be True
+            print("dfm.requires_grad:", dfm.requires_grad)  # Should be True
+
+        if epoch >= para.model.pretrain_epoch:
+
+            print("--before optimization mean:", atlas.mean())
+            print("Gradiente de atlas:", atlas.grad)
+
             opt.step()
-            opt.zero_grad()
+            print("--after optimization mean:", atlas.mean())
 
             
         print('Total training loss:', total)
@@ -323,19 +361,24 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     
 
 def main():
+    parser = argparse.ArgumentParser(description='Run Atlas Trainer')
+    parser.add_argument('--json_file', type=str, required=True, help='Name of the JSON file')
+    args = parser.parse_args()
 
+    json_file = args.json_file
     dev = get_device()
     para = read_yaml('./parameters.yml')
     data_dir = '.'
-    json_file = 'train_json'
+    # json_file = 'train_json'
     keyword = 'train'
+    # print(f'Running Atlas Trainer with JSON file: {json_file}')
     xDim, yDim, zDim= load_and_preprocess_data(data_dir, json_file, keyword)
 
 
 
     print (xDim, yDim, zDim)
-    dataset = SData('./train_json.json', "train")
-    ave_data = SData('./train_json.json', 'train')
+    dataset = SData(json_file + '.json', 'train')
+    ave_data = SData(json_file + '.json', 'train')
     trainloader = DataLoader(dataset, batch_size= para.solver.batch_size, shuffle=True)
     aveloader = DataLoader(ave_data, batch_size= 1 , shuffle = False)
     combined_loader = zip(trainloader, aveloader )
@@ -344,22 +387,12 @@ def main():
     
     print("Training data loader length:", len(trainloader))
     print("Atlas data loader length:", len(aveloader))
-    #in the data loader, each batch is a tuple of the image and the label, get all of them
-    images, labels = [], []
-    for batch in trainloader:
-        image, label = batch
-        images.append(image)
-        labels.append(label)
 
-    #load the atlas, 
-    for ave_scan in aveloader:
-        atlas, temp = ave_scan
-        #plot the atlas
-        visualize_atlas(atlas)
-    
-    #plot the image
-    # visualize_training_image(trainloader)
-    visualize_all_training_images(images)
+    print(para.solver.epochs)
+
+    #get the average atlas from the set of images
+    get_average_atlas(aveloader)
+
     
     input("Press Enter to continue...")
     
@@ -367,7 +400,7 @@ def main():
     
     visualize_atlas(atlas)
     
-    overlay_atlas_and_image(atlas, image)
+    # overlay_atlas_and_image(atlas, image)
   
 if __name__ == "__main__":
     main()

@@ -147,10 +147,14 @@ class Unet(nn.Module):
             for conv in convs:
                 x = conv(x)
             x_history.append(x)
-            x = self.pooling[level](x)
-        latent = x
+            # print(f"Before pooling: {x.shape}")
+            # x = self.pooling[level](x)
+            if x.shape[2] > 1:  # if depth is greater than 1
+                x = self.pooling[level](x)
 
-        #upsample to 128x128x128
+            # print(f"After pooling: {x.shape}")
+
+        latent = x
 
         # decoder forward pass with upsampling and concatenation
         for level, convs in enumerate(self.decoder):
@@ -162,14 +166,14 @@ class Unet(nn.Module):
                 target_size = x_history[-1].shape[2:]
                 if all(dim > 0 for dim in target_size):
                     x = F.interpolate(x, size=target_size, mode="trilinear", align_corners=True)
-                print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
+                # print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
                 x = torch.cat([x, x_history.pop()], dim=1)
 
         # remaining convs at full resolution
         for conv in self.remaining:
             x = conv(x)
-        # latent = self.pooling[0](self.pooling[0](latent)) <-- have to comment this line for the 2D dataset, redundant pooling (uncomment if getting errors with brainsss)
-        print(latent.shape)
+        # latent = self.pooling[0](self.pooling[0](latent))  #<-- have to comment this line for the 2D dataset, redundant pooling (uncomment if getting errors with brainsss)
+        # print(latent.shape)
         return x, latent
 
 class UnetDense(LoadableModel):

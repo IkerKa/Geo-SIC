@@ -239,9 +239,8 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     for ave_scan in trainloader:
         atlas, temp = ave_scan
         print("Atlas shape:", atlas.shape)
-        # save_atlas(atlas, 'atlas.nii.gz')
-        #plot the atlas
-        # visualize_atlas(atlas)
+        
+        break  #<---they only want the first one but didn't use the break statement 
         
     pause()
 
@@ -298,6 +297,8 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
                 reg_save[b_id,...] = reg_temp
 
             dfm = Torchinterp(atlas_bch,phiinv_bch) 
+
+            #update the atlas based on the distance and regularity loss
             Dist = criterion(dfm, tar_bch_img)
             Reg_loss =  reg_save.sum()
             loss_total =  Dist + weight_reg * Reg_loss

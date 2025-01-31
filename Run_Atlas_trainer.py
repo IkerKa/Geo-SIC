@@ -1,5 +1,6 @@
 from os import PathLike
 from pathlib import Path
+from signal import pause
 import numpy as np
 import SimpleITK as sitk
 import os, glob
@@ -104,6 +105,17 @@ def visualize_training_image(trainloader):
     plt.title('Imagen de Entrenamiento')
     plt.axis('off')
     plt.show()
+
+
+def visualize_all_training_images(images):
+  
+    # Visualize all the training images
+    for i in range(len(images)):
+        image = images[i].squeeze().cpu().numpy()
+        plt.imshow(image[image.shape[0] // 2, :, :], cmap='gray')
+        plt.title(f'Imagen de Entrenamiento {i+1}')
+        plt.axis('off')
+        plt.show()
 
 def save_atlas(atlas, filename):
     # Convierte el tensor de PyTorch a un array de NumPy
@@ -226,10 +238,12 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     # Get an initialization of the atlas
     for ave_scan in trainloader:
         atlas, temp = ave_scan
-        save_atlas(atlas, 'atlas.nii.gz')
+        print("Atlas shape:", atlas.shape)
+        # save_atlas(atlas, 'atlas.nii.gz')
         #plot the atlas
         # visualize_atlas(atlas)
         
+    pause()
 
     atlas = atlas.float()
     atlas.requires_grad=True
@@ -315,11 +329,8 @@ def main():
     json_file = 'train_json'
     keyword = 'train'
     xDim, yDim, zDim= load_and_preprocess_data(data_dir, json_file, keyword)
-    
-  
-    read_atlas()
 
-    input("Press Enter to continue...")
+
 
     print (xDim, yDim, zDim)
     dataset = SData('./train_json.json', "train")
@@ -330,15 +341,26 @@ def main():
     net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
     print (xDim, yDim, zDim)
     
+    print("Training data loader length:", len(trainloader))
+    print("Atlas data loader length:", len(aveloader))
+    #in the data loader, each batch is a tuple of the image and the label, get all of them
+    images, labels = [], []
     for batch in trainloader:
-        images, _ = batch
-        break
-    image = images[0]
+        image, label = batch
+        images.append(image)
+        labels.append(label)
+
+    #load the atlas, 
+    for ave_scan in aveloader:
+        atlas, temp = ave_scan
+        #plot the atlas
+        visualize_atlas(atlas)
     
     #plot the image
-    visualize_training_image(trainloader)
+    # visualize_training_image(trainloader)
+    visualize_all_training_images(images)
     
-    
+    input("Press Enter to continue...")
     
     atlas = train_network(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16,16, xDim, yDim, zDim, dev)
     

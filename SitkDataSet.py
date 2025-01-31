@@ -15,6 +15,7 @@ class SitkDataset(Dataset):
 
 
     def __len__(self):
+        # print("Length of the dataset: ", len(self.data_info[self.keyword]))
         return len(self.data_info[self.keyword])
     def __getitem__(self, idx):
         src = self.data_info[self.keyword][idx]['image']
@@ -27,5 +28,7 @@ class SitkDataset(Dataset):
         src_data = torch.from_numpy(sitk.GetArrayFromImage(src_img)).unsqueeze(0)
 
         lbl = self.data_info[self.keyword][idx]['label']
+
+        # print(f"Image {idx} loaded")
 
         return src_data, lbl

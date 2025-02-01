@@ -149,7 +149,7 @@ class Unet(nn.Module):
             x_history.append(x)
             # print(f"Before pooling: {x.shape}")
             # x = self.pooling[level](x)
-            if x.shape[2] > 1:  # if depth is greater than 1
+            if x.shape[2] > 1:  # if depth is greater than 1 <----- NEW
                 x = self.pooling[level](x)
 
             # print(f"After pooling: {x.shape}")

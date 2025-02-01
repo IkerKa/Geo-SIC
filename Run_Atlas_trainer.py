@@ -158,7 +158,9 @@ def visualize_atlas(atlas):
     atlas_np = atlas.squeeze().detach().cpu().numpy()
 
     # Visualiza una sección transversal del atlas
-    plt.imshow(atlas_np[atlas_np.shape[0] // 2, :, :], cmap='gray')
+    slice = atlas_np.shape[0] // 2
+    print("taking the slice:", slice)
+    plt.imshow(atlas_np[slice], cmap='gray')
     plt.title('Atlas')
     plt.axis('off')
     plt.show()
@@ -240,7 +242,7 @@ def initialize_network_optimizer(xDim, yDim, zDim, para, dev):
     return net, criterion, optimizer
 
 
-def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):
+def train_network_mine(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):
     """
     Train the network.
 
@@ -267,11 +269,11 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
         atlas, temp = ave_scan
         atlas = atlas.float().to(dev)
         print("Atlas shape:", atlas.shape)
-        
+        visualize_atlas(atlas)
         break  #<---they only want the first one but didn't use the break statement 
 
     
-    atlas = torch.nn.Parameter(atlas, requires_grad=True) 
+    # atlas = torch.nn.Parameter(atlas, requires_grad=True) 
     opt = optim.Adam([atlas], lr=para.solver.atlas_lr)
     atlas_history = []
     for epoch in range(para.solver.epochs):
@@ -356,8 +358,102 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     #save final atlas
     save_atlas(atlas, 'final_atlas.nii.gz')
     return atlas
+
+
+def save_atlas(atlas, filename):
     
+    atlas_np = atlas.squeeze().detach().cpu().numpy() 
+    print("Atlas shape:", atlas_np.shape) 
+    atlas_image = sitk.GetImageFromArray(atlas_np)
+    visualize_atlas(atlas)
+    sitk.WriteImage(atlas_image, filename)
+
+
     
+def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):
+    """
+    Train the network.
+
+    Parameters:
+    trainloader (DataLoader): DataLoader for training data.
+    aveloader (DataLoader): DataLoader for average scans or random scans to intial atlas.
+    net: The neural network model.
+    para: Parameters object.
+    criterion: The loss criterion.
+    optimizer: The optimizer.
+    DistType: Type of distance.
+    RegularityType: Type of regularity.
+    weight_dist: Weight for distance loss.
+    weight_reg: Weight for regularity loss.
+    reduced_xDim, reduced_yDim, reduced_zDim: Dimensions of reduced space.
+    xDim, yDim, zDim: Dimensions of the input image.
+    dev: Device to run on.
+    """
+    running_loss = 0
+    total = 0
+
+    # Get an initialization of the atlas
+    for ave_scan in trainloader:
+        atlas, temp = ave_scan
+    atlas.requires_grad=True
+    opt = optim.Adam([atlas], lr=para.solver.atlas_lr) 
+
+    for epoch in range(para.solver.epochs):
+
+        #we will save the whole atlas per epoch to visualize it later in a .nii file 
+            
+        net.train()
+        print('epoch:', epoch)
+        save_atlas(atlas, f'atlas_snapshots/atlas_epoch_{epoch}.nii.gz')
+        for j, tar_bch in enumerate(trainloader):
+            print('-batch:', j)
+            b, c, w, h, l = tar_bch[0].shape
+            optimizer.zero_grad()
+            phiinv_bch = torch.zeros(b, w, h, l, 3).to(dev)
+            reg_save = torch.zeros(b, w, h, l, 3).to(dev)
+            
+            # Pretrain the atlas building network
+            # if epoch <= para.model.pretrain_epoch:
+            #     perm_indices = torch.randperm(b)
+            #     atlas_bch = tar_bch[0][perm_indices]
+            # else:
+            atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h, l)
+
+            atlas_bch = atlas_bch.to(dev).float() 
+            tar_bch_img = tar_bch[0].to(dev).float() 
+            _ , momentum, latent_feat  = net(atlas_bch, tar_bch_img, registration=True) 
+            momentum = momentum.permute(0, 4, 3, 2, 1)
+            identity = get_grid2(xDim, dev).permute([0, 4, 3, 2, 1])  
+            epd = Epdiff(dev, (reduced_xDim, reduced_yDim, reduced_zDim), (xDim, yDim, zDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
+
+            for b_id in range(b):
+                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h , l, 3))
+                velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h , l, 3)  
+                reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
+                num_steps = para.solver.Euler_steps
+                v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)  
+                phiinv = displacement.unsqueeze(0) + identity
+                phiinv_bch[b_id,...] = phiinv 
+                reg_save[b_id,...] = reg_temp
+
+            dfm = Torchinterp(atlas_bch,phiinv_bch) 
+            Dist = criterion(dfm, tar_bch_img)
+            Reg_loss =  reg_save.sum()
+            loss_total =  Dist + weight_reg * Reg_loss
+            loss_total.backward(retain_graph=True)
+            optimizer.step()
+            running_loss += loss_total.item()
+            total += running_loss
+            running_loss = 0.0
+
+        if epoch >= para.model.pretrain_epoch:
+            print("--before optimization mean:", atlas.mean())
+            print(atlas.grad)
+            opt.step()
+            print("--after optimization mean:", atlas.mean())
+            opt.zero_grad()
+
+        print('Total training loss:', total)
 
 def main():
     parser = argparse.ArgumentParser(description='Run Atlas Trainer')

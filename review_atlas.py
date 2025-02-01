@@ -63,8 +63,8 @@ def see_atlas(atlas_path):
 if __name__ == "__main__":
     path = "atlas_snapshots/"
     #names are epoch_0, epoch_1, epoch_2, epoch_3, epoch_4
-    atlas1_path = path + "epoch_0.nii.gz"
-    atlas2_path = path + "epoch_4.nii.gz"
+    atlas1_path = path + "atlas_epoch_0.nii.gz"
+    atlas2_path = path + "atlas_epoch_2.nii.gz"
 
     see_atlas(atlas1_path)
     see_atlas(atlas2_path)

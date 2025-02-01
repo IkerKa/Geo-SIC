@@ -291,11 +291,8 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             reg_save = torch.zeros(b, w, h, l, 3).to(dev)
             
             # Pretrain the atlas building network
-            if epoch <= para.model.pretrain_epoch:
-                perm_indices = torch.randperm(b)
-                atlas_bch = tar_bch[0][perm_indices]
-            else:
-                atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h, l)
+            #I delete the pretrain condition, not sure if it is necessary (at least for now that we dont have too many images and the training is short)
+            atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h, l)
 
             atlas_bch = atlas_bch.to(dev).float() 
             # atlas_bch.requires_grad = True
@@ -342,11 +339,13 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             print("atlas_bch.requires_grad:", atlas_bch.requires_grad)  # Should be True
             print("dfm.requires_grad:", dfm.requires_grad)  # Should be True
 
-        if epoch >= para.model.pretrain_epoch:
+        # if epoch >= para.model.pretrain_epoch:
 
             print("--before optimization mean:", atlas.mean())
             print("Gradiente de atlas:", atlas.grad)
-
+            # print("Atlas Gradient Mean:", atlas.grad.mean())
+            # print("Atlas Gradient Max:", atlas.grad.max())
+            # print("Atlas Gradient Min:", atlas.grad.min())
             opt.step()
             print("--after optimization mean:", atlas.mean())
 

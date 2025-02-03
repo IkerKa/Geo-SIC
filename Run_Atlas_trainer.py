@@ -86,7 +86,7 @@ def get_average_atlas(aveloader):
         total += images
     average_atlas = total / len(aveloader)
     visualize_atlas(average_atlas)
-    return
+    return average_atlas
 
 def visualize_training_image(trainloader):
     # Obtén un batch de imágenes de entrenamiento
@@ -356,7 +356,8 @@ def train_network_mine(trainloader, aveloader, net, para, criterion, optimizer, 
     
     print('Finished Training')
     #save final atlas
-    save_atlas(atlas, 'final_atlas.nii.gz')
+    # save_atlas(atlas, 'final_atlas.nii.gz')
+    visualize_atlas(atlas)
     return atlas
 
 
@@ -365,7 +366,7 @@ def save_atlas(atlas, filename):
     atlas_np = atlas.squeeze().detach().cpu().numpy() 
     print("Atlas shape:", atlas_np.shape) 
     atlas_image = sitk.GetImageFromArray(atlas_np)
-    visualize_atlas(atlas)
+    # visualize_atlas(atlas)
     sitk.WriteImage(atlas_image, filename)
 
 
@@ -393,12 +394,33 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     total = 0
 
     # Get an initialization of the atlas
-    for ave_scan in trainloader:
-        atlas, temp = ave_scan
+    # for ave_scan in trainloader:
+    #     atlas, temp = ave_scan
+
+    # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
+    atlas = get_average_atlas(aveloader)
     atlas.requires_grad=True
     opt = optim.Adam([atlas], lr=para.solver.atlas_lr) 
 
+    print("Training setup:")
+    print("Atlas shape:", atlas.shape)
+    print("Number of epochs:", para.solver.epochs)
+    print("Batch size:", para.solver.batch_size)
+    print("Learning rate:", para.solver.lr)
+    print("Images for training:", len(trainloader))
+
+    print("\n\n")
+
+
     for epoch in range(para.solver.epochs):
+
+        # Agregar en cada epoch:
+        # 1. Visualizar el atlas
+        slice_idx = atlas.shape[2] // 2
+        plt.figure()
+        plt.imshow(atlas[0,0,slice_idx].detach().cpu().numpy(), cmap='gray')
+        plt.title(f"Epoch {epoch} - Max: {atlas.max():.3f}, Min: {atlas.min():.3f}")
+        # plt.show()
 
         #we will save the whole atlas per epoch to visualize it later in a .nii file 
             
@@ -446,14 +468,20 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             total += running_loss
             running_loss = 0.0
 
+            print(f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
+            print(f"--Atlas gradient norm: {torch.norm(atlas.grad)}")
+
         if epoch >= para.model.pretrain_epoch:
-            print("--before optimization mean:", atlas.mean())
-            print(atlas.grad)
             opt.step()
-            print("--after optimization mean:", atlas.mean())
             opt.zero_grad()
 
         print('Total training loss:', total)
+
+    print('Finished Training')
+    save_atlas(atlas, 'final_atlas.nii.gz')
+    visualize_atlas(atlas)
+    return atlas
+
 
 def main():
     parser = argparse.ArgumentParser(description='Run Atlas Trainer')

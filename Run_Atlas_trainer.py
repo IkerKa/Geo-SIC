@@ -1,3 +1,6 @@
+
+
+
 from os import PathLike
 from pathlib import Path
 from signal import pause
@@ -15,7 +18,7 @@ import torch.nn as nn  # type: ignore
 import torch.nn.functional as F  # type: ignore
 import torch.optim as optim      # type: ignore
 from easydict import EasyDict as edict  # type: ignore
-import nibabel as nib
+import nibabel as nib #type: ignore
 import random 
 import yaml
 from losses import NCC, MSE, Grad
@@ -27,6 +30,9 @@ import argparse
 import matplotlib.pyplot as plt # type: ignore
 
 import SimpleITK as sitk # type: ignore
+
+
+torch.cuda.empty_cache()
 
 def read_atlas():
     try:
@@ -394,11 +400,11 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     total = 0
 
     # Get an initialization of the atlas
-    # for ave_scan in trainloader:
-    #     atlas, temp = ave_scan
+    for ave_scan in trainloader:
+        atlas, temp = ave_scan
 
     # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
-    atlas = get_average_atlas(aveloader)
+    # atlas = get_average_atlas(aveloader)
     atlas.requires_grad=True
     opt = optim.Adam([atlas], lr=para.solver.atlas_lr) 
 
@@ -420,7 +426,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
         plt.figure()
         plt.imshow(atlas[0,0,slice_idx].detach().cpu().numpy(), cmap='gray')
         plt.title(f"Epoch {epoch} - Max: {atlas.max():.3f}, Min: {atlas.min():.3f}")
-        # plt.show()
+        plt.show()
 
         #we will save the whole atlas per epoch to visualize it later in a .nii file 
             

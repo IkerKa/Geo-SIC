@@ -161,3 +161,7 @@ cython_debug/
 
 datasets/
 datasets_aux/
+
+datasets_npy/
+
+datasets_npz/

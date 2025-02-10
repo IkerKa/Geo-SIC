@@ -402,6 +402,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
     # Get an initialization of the atlas
     for ave_scan in trainloader:
         atlas, temp = ave_scan
+        break;  #<---they only want the first one but didn't use the break statement
 
     # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
     # atlas = get_average_atlas(aveloader)
@@ -422,11 +423,11 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
 
         # Agregar en cada epoch:
         # 1. Visualizar el atlas
-        slice_idx = atlas.shape[2] // 2
-        plt.figure()
-        plt.imshow(atlas[0,0,slice_idx].detach().cpu().numpy(), cmap='gray')
-        plt.title(f"Epoch {epoch} - Max: {atlas.max():.3f}, Min: {atlas.min():.3f}")
-        plt.show()
+        # slice_idx = atlas.shape[2] // 2
+        # plt.figure()
+        # plt.imshow(atlas[0,0,slice_idx].detach().cpu().numpy(), cmap='gray')
+        # plt.title(f"Epoch {epoch} - Max: {atlas.max():.3f}, Min: {atlas.min():.3f}")
+        # plt.show()
 
         #we will save the whole atlas per epoch to visualize it later in a .nii file 
             
@@ -477,9 +478,9 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
             print(f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
             print(f"--Atlas gradient norm: {torch.norm(atlas.grad)}")
 
-        if epoch >= para.model.pretrain_epoch:
-            opt.step()
-            opt.zero_grad()
+        # if epoch >= para.model.pretrain_epoch:
+        opt.step()
+            # opt.zero_grad()
 
         print('Total training loss:', total)
 

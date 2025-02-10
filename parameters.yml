@@ -3,7 +3,7 @@ model:
     optimizer: 'Adam'
     scheduler: 'CosAn'
     loss: 'L2'    
-    augmentation: True
+    augmentation: False
     image_grad: False
     kernel_K: False
     pure_atlas_bulding: True

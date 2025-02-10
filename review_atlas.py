@@ -59,12 +59,7 @@ def compare_atlases(atlas1_path, atlas2_path):
     plt.imshow(diff[slice_idx], cmap="hot")
     plt.title("Difference (After - Before)")
 
-    # Binarized difference
-    binarized_diff = np.where(diff != 0, 1, 0)
-    plt.subplot(1, 4, 4)
-    plt.imshow(binarized_diff[slice_idx], cmap="hot", vmin=0, vmax=1)
-    plt.title("Binarized Difference")
-
+    
     plt.tight_layout()
     plt.show()
 
@@ -103,7 +98,7 @@ def see_atlas(atlas_path):
 if __name__ == "__main__":
     path = "atlas_snapshots/"
     atlas1_path = path + "atlas_epoch_0.nii.gz"
-    atlas2_path = path + "atlas_epoch_11.nii.gz"
+    atlas2_path = path + "atlas_epoch_12.nii.gz"
 
     see_atlas(atlas1_path)
     see_atlas(atlas2_path)

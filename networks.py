@@ -1,17 +1,31 @@
 from operator import pos
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions.normal import Normal
+import torch # type: ignore
+import torch.nn as nn # type: ignore
+import torch.nn.functional as F     # type: ignore
+from torch.distributions.normal import Normal #type: ignore
 # from . import layers
 from layers import *
 from modelio import LoadableModel, store_config_args
+from torch.utils.tensorboard import SummaryWriter # type: ignore
+
 
 def Torchinterp(src, phiinv):  #src:[b, 1, 64, 64, 64]     phiinv: [b, 64, 64, 64, 3]
     if(src.shape[-3]==1 and src.shape[-4]==1):
         src = src.squeeze(-3)
         phiinv = phiinv[...,0:2].squeeze(-4)
+    mode='bilinear'
+    shape = phiinv.shape[1:-1] 
+    # normalize deformation grid values to [-1, 1] 
+    for i in range(len(shape)):
+        phiinv[...,i] = 2 * (phiinv[...,i] / (shape[i] - 1) - 0.5)
+    return nnf.grid_sample(src, phiinv, align_corners=False,mode = mode, padding_mode= 'zeros')
+
+
+def Torchinterp2D(src, phiinv):  #src:[b, 1, 64, 64]     phiinv: [b, 64, 64, 2]
+    if(src.shape[-2]==1 and src.shape[-3]==1):
+        src = src.squeeze(-2)
+        phiinv = phiinv[...,0:2].squeeze(-3)
     mode='bilinear'
     shape = phiinv.shape[1:-1] 
     # normalize deformation grid values to [-1, 1] 
@@ -29,6 +43,20 @@ def get_grid2(imagesize, device):
     grid = grid.to(device)
     return grid
 
+def get_grid2D(imagesize, device):
+    size = (imagesize,imagesize)                    # We are using 2D images
+    # create sampling grid
+    vectors = [torch.arange(0, s) for s in size]
+    grids = torch.meshgrid(vectors)
+    grid = torch.stack(grids)
+    grid = torch.unsqueeze(grid, 0)
+    grid = grid.to(device)
+    return grid
+
+
+def default_unet_features():
+    return [[16, 32, 32, 32], [32, 32, 32, 32, 32, 16, 16]]
+
 
 class Unet(nn.Module):
     """
@@ -38,6 +66,9 @@ class Unet(nn.Module):
 
         encoder: [16, 32, 32, 32]
         decoder: [32, 32, 32, 32, 32, 16, 16]
+
+    Neural network adapted for 1D, 2D, or 3D data.
+    
     """
 
     def __init__(self,
@@ -51,7 +82,7 @@ class Unet(nn.Module):
                  half_res=False):
         """
         Parameters:
-            inshape: Input shape. e.g. (192, 192, 192)
+            inshape: Input shape. e.g. (192, 192, 192) for 3D data, (192, 192) for 2D data, etc.
             infeats: Number of input features.
             nb_features: Unet convolutional features. Can be specified via a list of lists with
                 the form [[encoder feats], [decoder feats]], or as a single integer. 
@@ -148,9 +179,7 @@ class Unet(nn.Module):
                 x = conv(x)
             x_history.append(x)
             # print(f"Before pooling: {x.shape}")
-            # x = self.pooling[level](x)
-            if x.shape[2] > 1:  # if depth is greater than 1 <----- NEW
-                x = self.pooling[level](x)
+            x = self.pooling[level](x)
 
             # print(f"After pooling: {x.shape}")
 
@@ -162,12 +191,14 @@ class Unet(nn.Module):
                 x = conv(x)
             if not self.half_res or level < (self.nb_levels - 2):
                 x = self.upsampling[level](x)
-                # Ensure dimensions are valid before interpolation
-                target_size = x_history[-1].shape[2:]
-                if all(dim > 0 for dim in target_size):
-                    x = F.interpolate(x, size=target_size, mode="trilinear", align_corners=True)
-                # print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
                 x = torch.cat([x, x_history.pop()], dim=1)
+                # Ensure dimensions are valid before interpolation
+                #determine interpolation method 
+                # target_size = x_history[-1].shape[2:]
+                # if all(dim > 0 for dim in target_size):
+                #     x = F.interpolate(x, size=target_size, mode="trilinear", align_corners=True)
+                # print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
+                
 
         # remaining convs at full resolution
         for conv in self.remaining:
@@ -183,7 +214,7 @@ class UnetDense(LoadableModel):
 
     @store_config_args
     def __init__(self,
-                 inshape,
+                 inshape,                       #i.e (128, 128, 128) or (128, 128)
                  nb_unet_features=None,
                  nb_unet_levels=None,
                  unet_feat_mult=1,
@@ -239,8 +270,9 @@ class UnetDense(LoadableModel):
         )
 
         # configure unet to flow field layer
-        Conv = getattr(nn, 'Conv%dd' % ndims)
-        self.flow = Conv(self.unet_model.final_nf, ndims, kernel_size=3, padding=1)
+        Conv = getattr(nn, 'Conv%dd' % ndims)       #for 3D data Conv3d, for 2D data Conv2d
+        
+        self.flow = Conv(self.unet_model.final_nf, ndims, kernel_size=3, padding=1)     # * WE CAN MODIFY THIS TO HAVE DIFFERENT CONVOLUTIONS.
 
         # init flow layer with small weights and bias
         self.flow.weight = nn.Parameter(Normal(0, 1e-5).sample(self.flow.weight.shape))
@@ -279,6 +311,10 @@ class UnetDense(LoadableModel):
             source: Source image tensor.
             target: Target image tensor.
             registration: Return transformed image and flow. Default is False.
+
+        * ADAPTED FOR 2D IMAGES
+         i.e source: [b, 1, 64, 64] and target: [b, 1, 64, 64]
+
         '''
 
         # concatenate inputs and propagate unet
@@ -297,7 +333,10 @@ class UnetDense(LoadableModel):
         neg_flow = -pos_flow if self.bidir else None
 
         # integrate to produce diffeomorphic warp j
+
+        # !!! SE ESTA LLAMANDO SVF? DE VERDAD? Comprobarlo!
         if (shooting == "SVF"):
+            print("Shooting!!")
             if self.integrate:
                 pos_flow = self.integrate(pos_flow)
                 neg_flow = self.integrate(neg_flow) if self.bidir else None

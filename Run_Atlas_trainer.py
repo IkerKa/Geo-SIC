@@ -28,7 +28,7 @@ from uEpdiff import Epdiff
 from networks import *
 import argparse
 import matplotlib.pyplot as plt # type: ignore
-
+from datasets.datasetloader import GoogleDrawDataset2d, DataLoaderHandler
 import SimpleITK as sitk # type: ignore
 
 
@@ -50,19 +50,25 @@ def read_atlas():
         return None
     
 
-def overlay_atlas_and_image(atlas, image):
+def overlay_atlas_and_image(atlas, image, is_2d=False):
     # Convierte los tensores a arrays de NumPy
     atlas_np = atlas.squeeze().detach().cpu().numpy()
     image_np = image.squeeze().cpu().numpy()
 
-    # Selecciona una sección transversal (por ejemplo, la mitad en el eje z)
-    slice_idx = atlas_np.shape[0] // 2
-    atlas_slice = atlas_np[slice_idx, :, :]
-    image_slice = image_np[slice_idx, :, :]
+    if is_2d:
+        # Para imágenes 2D, simplemente superpone las imágenes
+        plt.imshow(image_np, cmap='gray', alpha=0.5)  # Imagen de entrenamiento (semitransparente)
+        plt.imshow(atlas_np, cmap='hot', alpha=0.5)   # Atlas (semitransparente)
+    else:
+        # Selecciona una sección transversal (por ejemplo, la mitad en el eje z)
+        slice_idx = atlas_np.shape[0] // 2
+        atlas_slice = atlas_np[slice_idx, :, :]
+        image_slice = image_np[slice_idx, :, :]
 
-    # Superpone las imágenes
-    plt.imshow(image_slice, cmap='gray', alpha=0.5)  # Imagen de entrenamiento (semitransparente)
-    plt.imshow(atlas_slice, cmap='hot', alpha=0.5)   # Atlas (semitransparente)
+        # Superpone las imágenes
+        plt.imshow(image_slice, cmap='gray', alpha=0.5)  # Imagen de entrenamiento (semitransparente)
+        plt.imshow(atlas_slice, cmap='hot', alpha=0.5)   # Atlas (semitransparente)
+
     plt.title('Superposición: Atlas e Imagen de Entrenamiento')
     plt.axis('off')
     plt.show()
@@ -84,15 +90,23 @@ def save_training_image(trainloader, filename):
 
 
 #function to obtain the average atlas from a set of images in order to compare it with the final atlas
-def get_average_atlas(aveloader):
+def get_average_atlas(aveloader, _debug=False):
     # Get the average atlas from a set of images
     total = 0
+    count = 0
     for batch in aveloader:
-        images, _ = batch  # Las imágenes están en el primer elemento del batch
-        total += images
-    average_atlas = total / len(aveloader)
-    visualize_atlas(average_atlas)
-    return average_atlas
+        img = batch[0].squeeze().cpu().numpy()
+        total += img
+        count += 1
+    average_atlas = total / count
+
+    if _debug:
+        print('Average Atlas Shape:', average_atlas.shape)
+        plt.imshow(average_atlas, cmap='gray')
+        plt.title('Average Atlas')
+        plt.axis('off')
+        plt.show()
+
 
 def visualize_training_image(trainloader):
     # Obtén un batch de imágenes de entrenamiento
@@ -159,17 +173,6 @@ def visualize_atlas_training(atlas_tensor, epoch, save_path='atlas_snapshots'):
     nib.save(nib.Nifti1Image(atlas_np[0, 0], np.eye(4)), f'{save_path}/epoch_{epoch}.nii.gz')
 
 
-def visualize_atlas(atlas):
-    # Convierte el tensor de PyTorch a un array de NumPy
-    atlas_np = atlas.squeeze().detach().cpu().numpy()
-
-    # Visualiza una sección transversal del atlas
-    slice = atlas_np.shape[0] // 2
-    print("taking the slice:", slice)
-    plt.imshow(atlas_np[slice], cmap='gray')
-    plt.title('Atlas')
-    plt.axis('off')
-    plt.show()
 
 
 def get_device():
@@ -206,22 +209,32 @@ def load_and_preprocess_data(data_dir, json_file, keyword):
     xDim, yDim,  zDim = temp_scan.shape
     return xDim, yDim, zDim
 
-##################2D data loading#######################
+# Same function as before, but with the reduced dimensions (2D images)
 def load_and_preprocess_data2D(data_dir, json_file, keyword):
     readfilename = f'{data_dir}/{json_file}.json'
-    print(readfilename)
     try:
         with open(readfilename, 'r') as f:
             data = json.load(f)
+            # print(data)
     except Exception as e:
         print(f'Error loading JSON data: {e}')
         return None
-    
     outputs = []
-    temp_scan = sitk.GetArrayFromImage(sitk.ReadImage(f'{data_dir}/datasets/triangle_sketches/{data[keyword][0]["image"]}'))
-    print(temp_scan.shape)
+    temp_scan = sitk.GetArrayFromImage(sitk.ReadImage(f'{data_dir}/{data[keyword][0]["image"]}'))
+    temp_scan = temp_scan.astype(np.float32)
+    print("temp_scan shape:", temp_scan.shape)
+
     xDim, yDim, _ = temp_scan.shape
     return xDim, yDim
+
+
+def save_atlas(atlas, filename):
+    
+    atlas_np = atlas.squeeze().detach().cpu().numpy() 
+    print("Atlas shape:", atlas_np.shape) 
+    atlas_image = sitk.GetImageFromArray(atlas_np)
+    # visualize_atlas(atlas)
+    sitk.WriteImage(atlas_image, filename)
 
 
 
@@ -247,8 +260,29 @@ def initialize_network_optimizer(xDim, yDim, zDim, para, dev):
 
     return net, criterion, optimizer
 
+def initialize_network_optimizer2D(xDim, yDim, para, dev):
+    net = UnetDense(inshape=(xDim, yDim),
+                      nb_unet_features=[[16, 32,32], [ 32, 32, 32, 16, 16]],
+                      nb_unet_conv_per_level=1,
+                      int_steps=7,
+                      int_downsize=2,
+                      src_feats=1,
+                      trg_feats=1,
+                      unet_half_res=True)
+    net = net.to(dev)
 
-def train_network_mine(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):
+    if para.model.loss == 'L2':
+        criterion = nn.MSELoss()
+    elif para.model.loss == 'L1':
+        criterion = nn.L1Loss()
+    if para.model.optimizer == 'Adam':
+        optimizer = optim.Adam(net.parameters(), lr=para.solver.lr)
+    elif para.model.optimizer == 'SGD':
+        optimizer = optim.SGD(net.parameters(), lr=para.solver.lr, momentum=0.9)
+
+    return net, criterion, optimizer
+
+def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, xDim, yDim, dev):
     """
     Train the network.
 
@@ -267,64 +301,58 @@ def train_network_mine(trainloader, aveloader, net, para, criterion, optimizer, 
     xDim, yDim, zDim: Dimensions of the input image.
     dev: Device to run on.
     """
+    
+
+    # Same function as before, but with the reduced dimensions (2D images)
+
     running_loss = 0
     total = 0
 
     # Get an initialization of the atlas
     for ave_scan in trainloader:
         atlas, temp = ave_scan
-        atlas = atlas.float().to(dev)
-        print("Atlas shape:", atlas.shape)
-        visualize_atlas(atlas)
-        break  #<---they only want the first one but didn't use the break statement 
+        break;
 
-    
-    # atlas = torch.nn.Parameter(atlas, requires_grad=True) 
-    opt = optim.Adam([atlas], lr=para.solver.atlas_lr)
-    atlas_history = []
+    # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
+    atlas.requires_grad=True
+    opt = optim.Adam([atlas], lr=para.solver.atlas_lr)  #<---they used a different optimizer for the atlas
+
+
+    print("Training setup:")
+    print("-----------------------------------")
+    print("Atlas shape:", atlas.shape)
+    print("Number of epochs:", para.solver.epochs)
+    print("Batch size:", para.solver.batch_size)
+    print("-----------------------------------")
     for epoch in range(para.solver.epochs):
         net.train()
-        print('epoch:', epoch)
-
-        visualize_atlas_training(atlas, epoch)
-        atlas_history.append(atlas.detach().clone().cpu().numpy())
-
+        print("Computing epoch:", epoch, ". Current loss:", total)
         for j, tar_bch in enumerate(trainloader):
-
-            print('batch:', j)
-            b, c, w, h, l = tar_bch[0].shape
+            print("Computing batch:", j)
+            #-take the dimensions of the batch for 2D images.
+            b, c, w, h = tar_bch[0].shape
+            #-restart the optimizer gradient
             optimizer.zero_grad()
-            opt.zero_grad()
-            phiinv_bch = torch.zeros(b, w, h, l, 3).to(dev)
-            reg_save = torch.zeros(b, w, h, l, 3).to(dev)
-            
-            # Pretrain the atlas building network
-            #I delete the pretrain condition, not sure if it is necessary (at least for now that we dont have too many images and the training is short)
-            atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h, l)
+            #-initialize the phiinv and reg_save tensors
+            phiinv_bch = torch.zeros(b, w, h, 2).to(dev)
+            reg_save = torch.zeros(b, w, h, 2).to(dev)
 
-            atlas_bch = atlas_bch.to(dev).float() 
-            # atlas_bch.requires_grad = True
-            tar_bch_img = tar_bch[0].to(dev).float() 
+            # Now we wont pretrain the atlas building network 
+            atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
+            atlas_bch = atlas_bch.to(dev).float()
+            tar_bch_img = tar_bch[0].to(dev).float()
 
-            # print("atlas_bch shape:", atlas_bch.shape)
-            # print("tar_bch_img shape:", tar_bch_img.shape)
+            #pass the atlas and the target image to the network
+            _ , momentum, latent_feat  = net(atlas_bch, tar_bch_img, registration=True)
+            momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
+            
+            #MATHS things
+            identity = get_grid2D(w, h, dev).permute([0, 3, 2, 1])
+            epd = Epdiff(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
 
-            
-            
-            _ , momentum, latent_feat = net(atlas_bch, tar_bch_img, registration=True)  #When TRUE it returns 3 parameters
-            
-            # print(res)
-            # latent_feat, momentum, _ = res
-            # print("Network output (momentum) shape:", momentum.shape)
-            # print("Network output (latent_feat) shape:", latent_feat.shape)
-            momentum = momentum.permute(0, 4, 3, 2, 1)
-            # print(momentum.shape)
-            identity = get_grid2(xDim, dev).permute([0, 4, 3, 2, 1])  
-            epd = Epdiff(dev, (reduced_xDim, reduced_yDim, reduced_zDim), (xDim, yDim, zDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
-
-            for b_id in range(b):
-                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, l, 3))
-                velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h , l, 3)  
+            for b_id in range(b):   #adapted to 2D images
+                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, 2))
+                velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h, 2)  
                 reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
                 num_steps = para.solver.Euler_steps
                 v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)  
@@ -332,50 +360,33 @@ def train_network_mine(trainloader, aveloader, net, para, criterion, optimizer, 
                 phiinv_bch[b_id,...] = phiinv 
                 reg_save[b_id,...] = reg_temp
 
-            dfm = Torchinterp(atlas_bch,phiinv_bch) 
-
-            #update the atlas based on the distance and regularity loss
+            dfm = Torchinterp2D(atlas_bch,phiinv_bch)
             Dist = criterion(dfm, tar_bch_img)
             Reg_loss =  reg_save.sum()
             loss_total =  Dist + weight_reg * Reg_loss
             loss_total.backward(retain_graph=True)
+            
+            #Update the network parameters
             optimizer.step()
+
             running_loss += loss_total.item()
             total += running_loss
             running_loss = 0.0
 
-            print("atlas_bch.requires_grad:", atlas_bch.requires_grad)  # Should be True
-            print("dfm.requires_grad:", dfm.requires_grad)  # Should be True
-
-        # if epoch >= para.model.pretrain_epoch:
-
-            print("--before optimization mean:", atlas.mean())
-            print("Gradiente de atlas:", atlas.grad)
-            # print("Atlas Gradient Mean:", atlas.grad.mean())
-            # print("Atlas Gradient Max:", atlas.grad.max())
-            # print("Atlas Gradient Min:", atlas.grad.min())
-            opt.step()
-            print("--after optimization mean:", atlas.mean())
-
+            #debug information after epoch
             
-        print('Total training loss:', total)
+            print(f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
+            print(f"--RUNNING LOSS: {running_loss}")
+
+
+
+        opt.step()
+        opt.zero_grad() 
     
     print('Finished Training')
-    #save final atlas
-    # save_atlas(atlas, 'final_atlas.nii.gz')
-    visualize_atlas(atlas)
+    save_atlas(atlas, 'final_atlas.nii.gz')
+
     return atlas
-
-
-def save_atlas(atlas, filename):
-    
-    atlas_np = atlas.squeeze().detach().cpu().numpy() 
-    print("Atlas shape:", atlas_np.shape) 
-    atlas_image = sitk.GetImageFromArray(atlas_np)
-    # visualize_atlas(atlas)
-    sitk.WriteImage(atlas_image, filename)
-
-
     
 def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):
     """
@@ -480,7 +491,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
 
         # if epoch >= para.model.pretrain_epoch:
         opt.step()
-            # opt.zero_grad()
+        opt.zero_grad()
 
         print('Total training loss:', total)
 
@@ -493,6 +504,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
 def main():
     parser = argparse.ArgumentParser(description='Run Atlas Trainer')
     parser.add_argument('--json_file', type=str, required=True, help='Name of the JSON file')
+    parser.add_argument('--two_dims', type=bool, default=True, help='Whether to use 2D images')
     args = parser.parse_args()
 
     json_file = args.json_file
@@ -502,33 +514,48 @@ def main():
     # json_file = 'train_json'
     keyword = 'train'
     # print(f'Running Atlas Trainer with JSON file: {json_file}')
-    xDim, yDim, zDim= load_and_preprocess_data(data_dir, json_file, keyword)
 
+    if args.two_dims:
+        datadir = 'datasets/jsons/circle.ndjson'
+        #load the ndjson file and get the dimensions of the image
+        dataset = GoogleDrawDataset2d(datadir, samples=5)
+        trainloader = DataLoader(dataset, batch_size=16, shuffle=True)
+        aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
+        datahandler = DataLoaderHandler(ndjson_file=datadir, samples=5, resize=128, batch_size=16)
+        datahandler.show_example()
 
-    print (xDim, yDim, zDim)
-    dataset = SData(json_file + '.json', 'train')
-    ave_data = SData(json_file + '.json', 'train')
-    trainloader = DataLoader(dataset, batch_size= para.solver.batch_size, shuffle=True)
-    aveloader = DataLoader(ave_data, batch_size= 1 , shuffle = False)
-    combined_loader = zip(trainloader, aveloader )
-    net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
-    print (xDim, yDim, zDim)
+        #obtain the dimensions of the image
+        xDim, yDim = 128, 128
     
-    print("Training data loader length:", len(trainloader))
-    print("Atlas data loader length:", len(aveloader))
+        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
+        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
+        print("2D image dimensions:", xDim, yDim)
 
-    print(para.solver.epochs)
+    else:
+        xDim, yDim, zDim = load_and_preprocess_data(data_dir, json_file, keyword)
+        dataset = SData(json_file + '.json', 'train')
+        ave_data = SData(json_file + '.json', 'train')
+        trainloader = DataLoader(dataset, batch_size= para.solver.batch_size, shuffle=True)
+        aveloader = DataLoader(ave_data, batch_size= 1 , shuffle = False)
+        combined_loader = zip(trainloader, aveloader )
+        net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
+        print("3D image dimensions:", xDim, yDim, zDim)
+    
+    for batch in trainloader:
+        print("Tamaño del batch:", batch[0].shape)
+        break
 
-    #get the average atlas from the set of images
-    get_average_atlas(aveloader)
+    #plot the average atlas
+    get_average_atlas(aveloader, _debug=True)
+    
 
+    if args.two_dims:
+        atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev)
+    else:
+        atlas = train_network(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16,16, xDim, yDim, zDim, dev)
     
-    input("Press Enter to continue...")
     
-    atlas = train_network(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16,16, xDim, yDim, zDim, dev)
-    
-    visualize_atlas(atlas)
     
     # overlay_atlas_and_image(atlas, image)
   

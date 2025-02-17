@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 from PIL import Image
 import io
+# from ..logger import Logger as log 
 
 class GoogleDrawDataset2d(Dataset):
     """
@@ -23,34 +24,32 @@ class GoogleDrawDataset2d(Dataset):
         self.samples = samples
         self.resize = resize
         self.transform = transform
-        self.images = []  # Aquí se almacenarán las imágenes procesadas (tipo PIL)
+        self.images = []  # PIL image set save
         
         # Leer el archivo .ndjson
         with open(ndjson_file, 'r') as f:
             drawings = [json.loads(line) for line in f]
         
-        # Procesar cada dibujo
+        # Per each drawing...
         for i, drawing in enumerate(drawings[:samples]):
-            # Crear figura y ejes para dibujar
-            fig, ax = plt.subplots(figsize=(2.56, 2.56), dpi=100)  # Esto crea una imagen de ~256x256 píxeles
+            fig, ax = plt.subplots(figsize=(2.56, 2.56), dpi=100)  #~256x256 píxeles
             ax.set_xlim(0, 255)
             ax.set_ylim(0, 255)
             ax.axis('off')
-            ax.set_facecolor("white")  # Fondo blanco
+            ax.set_facecolor("white")  #White background
 
-            # Dibujar cada trazo
+            # Plot each stroke
             for stroke in drawing["drawing"]:
                 x, y = stroke[0], stroke[1]
-                # Se invierte el eje Y para que el dibujo quede orientado correctamente
+                #invert y axis
                 ax.plot(x, 255 - np.array(y), color="black", linewidth=2)
 
-            # Guardar la figura en un buffer de memoria en lugar de en disco
+            # --image PIL object--
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=100, pad_inches=0)
             plt.close(fig)
             buf.seek(0)
 
-            # Abrir la imagen con PIL y convertirla a escala de grises
             image = Image.open(buf).convert("L")
             if self.resize is not None:
                 image = image.resize(self.resize)
@@ -60,11 +59,10 @@ class GoogleDrawDataset2d(Dataset):
         return len(self.images)
     
     def __getitem__(self, idx):
-        # Convertir la imagen PIL a un array NumPy y normalizar los valores [0,1]
-        image_np = np.array(self.images[idx], dtype=np.float32) / 255.0
-        # Agregar la dimensión del canal para obtener [1, H, W]
+        # From PIL to Numpy to Tensor (and normalize)
+        image_np = np.array(self.images[idx], dtype=np.float32) / 255.0 #[1, H, W]
         image_tensor = torch.from_numpy(image_np).unsqueeze(0)
-        if self.transform:
+        if self.transform:  #optional
             image_tensor = self.transform(image_tensor)
         return image_tensor
 
@@ -83,8 +81,7 @@ class DataLoaderHandler:
     
     def show_example(self):
         for batch in self.dataloader:
-            print("Tamaño del batch:", batch.shape)  # Debería mostrar: [batch_size, 1, H, W]
-            # Mostrar la primera imagen del batch usando matplotlib
+            # log.info(message=f"Batch shape: {batch.shape}")
             img = batch[0].squeeze().numpy()
             plt.imshow(img, cmap="gray")
             plt.title("Ejemplo de imagen 2D")

@@ -30,6 +30,8 @@ class MHD2DDataset(Dataset):
         # count the number of files in the folder
         mhd_files = [f for f in os.listdir(mhd_folder) if f.endswith('.dcm')]
         print(f"Number of .mhd files: {len(mhd_files)}")
+        if len(mhd_files) == 0:
+            print("No files found, you sure you are in the right folder? or the extension is .mhd, if not change the line 31")
         # Read the .mhd files
         for mhd_file in mhd_files:
             # Read the .mhd file

@@ -31,6 +31,8 @@ from networks import *
 import argparse
 import matplotlib.pyplot as plt # type: ignore
 from datasets.datasetloader import GoogleDrawDataset2d, DataLoaderHandler
+from datasets.datasetloader3d import MHD2DDataset
+from datasets.datasetloader3d import DataLoaderHandler as d3d
 import SimpleITK as sitk # type: ignore
 
 #logger
@@ -366,7 +368,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     #plot the loss per epoch
     visualize_loss(loss_per_epoch)
     visualize_time(times)
-    
+
     return atlas
     
 def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):
@@ -488,19 +490,13 @@ def main():
     lg = log(log_file='aplication.log')
 
     parser = argparse.ArgumentParser(description='Run Atlas Trainer')
-    parser.add_argument('--json_file', type=str, required=True, help='Name of the JSON file')
-    parser.add_argument('--two_dims', type=bool, default=True, help='Whether to use 2D images')
     args = parser.parse_args()
 
-    json_file = args.json_file
     dev = get_device()
     para = read_yaml('./parameters.yml')
-    data_dir = '.'
-    # json_file = 'train_json'
-    keyword = 'train'
-    # print(f'Running Atlas Trainer with JSON file: {json_file}')
+    two_dims = 0
 
-    if args.two_dims:
+    if two_dims == 1:
         lg.custom("Running Atlas Trainer with 2D images", "green")
         datadir = 'datasets/jsons/circle.ndjson'
         #load the ndjson file and get the dimensions of the image
@@ -533,23 +529,43 @@ def main():
         # pause();
 
     else:
-        xDim, yDim, zDim = load_and_preprocess_data(data_dir, json_file, keyword)
-        dataset = SData(json_file + '.json', 'train')
-        ave_data = SData(json_file + '.json', 'train')
-        trainloader = DataLoader(dataset, batch_size= para.solver.batch_size, shuffle=True)
-        aveloader = DataLoader(ave_data, batch_size= 1 , shuffle = False)
-        combined_loader = zip(trainloader, aveloader )
-        net, criterion, optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
-        print("3D image dimensions:", xDim, yDim, zDim)
+        lg.custom("Running Atlas Trainer with Brain slices", "green")
+        datadir = 'datasets/dcm/'
+        #load the ndjson file and get the dimensions of the image
+        lg.info(message=f"Loading dataset from: {datadir}")
+        dataset = MHD2DDataset(datadir)
+        trainloader = DataLoader(dataset, batch_size=8, shuffle=True)   # ? Batch size?
+        aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
+
+        #log the sizes of the dataset 2D
+        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
+
+
+        datahandler = d3d(mhd_folder=datadir, batch_size=8)
+        datahandler.show_example()
+        # datahandler.save_dataloader('dataloader.pt')
+
+        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
+        for batch in trainloader:
+            image = batch[0]
+            lg.info(message=f"Image shape: {image.shape}")
+            break
+
+        xDim, yDim = image.shape[1], image.shape[2]
+        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
+
+    
+        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
+        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
     
     #plot the average atlas
     # get_average_atlas(aveloader, _debug=True)
     
 
-    if args.two_dims:
-        atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev, lg)
-    else:
-        atlas = train_network(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16,16, xDim, yDim, zDim, dev)
+
+    atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev, lg)
+
+        
     
     
     

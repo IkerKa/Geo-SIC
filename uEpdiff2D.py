@@ -21,32 +21,25 @@ class Epdiff2D(nn.Module):
         #######   Lcoeff : V˜ → M˜ ∗ maps v to M (momentum)     Kcoeff: M˜ →  V˜
         self.Kcoeff, self.Lcoeff, self.CDcoeff = self.fftOpers (self.alpha, self.gamma, self.lpow, self.truncX, self.truncY, device)
         # self.Kcoeff2, self.Lcoeff2 = self.fftOpers2 (8)
-        
     
 
-
-
+    # !! FUNCION A MEDIO MODIFICAR: NO SE USA!!
     def fftOpers2(self, mode, batchsize):  #shape : [20, 64, 64, 64, 3]
-        size_x, size_y, size_z = self.iamgeSize[0], self.iamgeSize[1], self.iamgeSize[2]
+        size_x, size_y = self.iamgeSize[0], self.iamgeSize[1]
 
         spx = 1 ##spacing information x 
-        spy = 1 ##spacing information y 
-        spz = 1 ##spacing information z 
+        spy = 1 ##spacing information y
 
         if(self.truncZ != 1):
             gridx = torch.tensor(np.linspace(0, 1-1/size_x, size_x), dtype=torch.float)
-            gridx = gridx.reshape(1, size_x, 1, 1, 1).repeat([batchsize, 1, size_y, size_z, 1])
             gridy = torch.tensor(np.linspace(0, 1-1/size_y, size_y), dtype=torch.float)
-            gridy = gridy.reshape(1, 1, size_y, 1, 1).repeat([batchsize, size_x, 1, size_z, 1])
-            gridz = torch.tensor(np.linspace(0, 1-1/size_z, size_z), dtype=torch.float)
-            gridz = gridz.reshape(1, 1, 1, size_z, 1).repeat([batchsize, size_x, size_y, 1, 1])
-            grid = torch.cat((gridx, gridy, gridz), dim=-1).to(self.device)
+            grid = torch.cat((gridx, gridy), dim=-1).to(self.device)
 
 
-            trun1 = grid[:, :mode, :mode, :mode, :]     #[b, modes, modes, modes, 3]
-            trun2 = grid[:, -mode:, :mode, :mode, :]    #[b, modes, modes, modes, 3]
-            trun3 = grid[:, :mode, -mode:, :mode, :]    #[b, modes, modes, modes, 3]
-            trun4 = grid[:, -mode:, -mode:, :mode, :]   #[b, modes, modes, modes, 3]
+            trun1 = grid[:, :mode, :mode, :]     #[b, modes, modes, modes, 3]
+            trun2 = grid[:, -mode:, :mode, :]    #[b, modes, modes, modes, 3]
+            trun3 = grid[:, :mode, -mode:, :]    #[b, modes, modes, modes, 3]
+            trun4 = grid[:, -mode:, -mode:, :]   #[b, modes, modes, modes, 3]
             yy1 = torch.cat((trun1,trun2),dim=-4)       #[b, 2*modes, modes, modes, 3]      #[b, 16, 8, 8, 3]
             yy2 = torch.cat((trun3,trun4),dim=-4)       #[b, 2*modes, modes, modes, 3]      #[b, 16, 8, 8, 3]
             trunr = torch.cat((yy1,yy2),dim=-3)         #[b, 2*modes, 2*modes, modes, 3]    #[b, 16, 16, 8, 3]
@@ -76,10 +69,9 @@ class Epdiff2D(nn.Module):
 
         return Kcoeff, Lcoeff
 
-
-
+    # !! FUNCION A MEDIO MODIFICAR: NO SE USA!!
     def fftOpers2D(self, mode, batchsize):  #shape : [20, 64, 64, 64, 3]
-        size_x, size_y, size_z = self.iamgeSize[0], self.iamgeSize[1], self.iamgeSize[2]
+        size_x, size_y = self.iamgeSize[0], self.iamgeSize[1]
 
         gridx = torch.tensor(np.linspace(0, 1-1/size_x, size_x), dtype=torch.float)
         gridx = gridx.reshape(1, size_x, 1, 1).repeat([batchsize, 1, size_y, 1])
@@ -110,12 +102,7 @@ class Epdiff2D(nn.Module):
 
         return Lcoeff2D, Kcoeff2D
 
-
-
-
-
-
-
+    # FUNCION CONVERTIDA A 2D CORRECTAMENTE
     def fftOpers (self, alpha, gamma, lpow, truncX, truncY, device):
         fsx = self.iamgeSize[0]
         fsy = self.iamgeSize[1]
@@ -159,12 +146,8 @@ class Epdiff2D(nn.Module):
         spx = 1 ##spacing information x 
         spy = 1 ##spacing information y 
     
-
-
-
-
         for id in range (0,size):
-            index = 3*id;
+            index = 2*id;
             xcoeff = (-2.0*torch.cos(sX*fftLoc[index]) + 2.0)/(spx*spx);
             ycoeff = (-2.0*torch.cos(sY*fftLoc[index+1]) + 2.0)/(spy*spy);
             val = pow(alpha*(xcoeff + ycoeff)+gamma, lpow);
@@ -178,9 +161,6 @@ class Epdiff2D(nn.Module):
         
         
         return Kcoeff, Lcoeff, CDcoeff
-
-
-
 
     '''low-dimensional fftn/ifftn transforms for computation'''
     def fourier2spatial_bandlimi(self, input_vec):
@@ -200,7 +180,6 @@ class Epdiff2D(nn.Module):
             scracth_cp[...,i]=torch.fft.fftshift(torch.fft.fftn((input_vec[...,i].reshape(m,n,q)), dim=(-2,-1)), dim=(-2,-1))/(self.truncX*self.truncY)
             # scracth_cp[...,i]=torch.fft.fftn((input_vec[...,i].reshape(m,n,q)))
         return scracth_cp
-
 
     ################################ Computational operations ###################################
     '''Jacobian and JacobianTranspose'''
@@ -223,7 +202,6 @@ class Epdiff2D(nn.Module):
         size = self.truncX*self.truncY;
         JacX = torch.zeros(self.truncX*self.truncY*2 ,dtype=torch.cfloat).to(self.device)
         JacY = torch.zeros(self.truncX*self.truncY*2 ,dtype=torch.cfloat).to(self.device)
-        JacZ = torch.zeros(self.truncX*self.truncY*2 ,dtype=torch.cfloat).to(self.device)
         for i in range (0, size): 
             index = 2*i;
             JacX[index] = CDcoeff_oper[index]*input_vec[index];
@@ -231,14 +209,9 @@ class Epdiff2D(nn.Module):
 
             JacY[index] = CDcoeff_oper[index]*input_vec[index+1];
             JacY[index+1] = CDcoeff_oper[index+1]*input_vec[index+1];
-
-            JacZ[index] = CDcoeff_oper[index]*input_vec[index+2];
-            JacZ[index+1] = CDcoeff_oper[index+1]*input_vec[index+2];
         
         return JacX, JacY
 
-
-    
     def fourier2spatial(self, input_vec):
     
         '''input: a low-dimensional velocity as an 1-d vector'''
@@ -258,11 +231,9 @@ class Epdiff2D(nn.Module):
         '''output: a high-dimensional [h,w,c] tensor'''
         return output_vec
 
-
-
     def spatial2fourier (self, input_vec):
         '''input vect as a high-dimensional [h,w,c] tensor'''
-        [m,n,c ]=input_vec.shape
+        [m,n,c]=input_vec.shape
         start_ = int(m/2 - self.truncX/2)+1
         end_  = int(n/2 + self.truncX/2)+1
 
@@ -298,8 +269,6 @@ class Epdiff2D(nn.Module):
 
         return low_velo_f
 
-
-
     def mul_vec_corr(self, input_vect1, input_vect2,flag):
         '''Perform correlation if flag equals to 1'''
         if (flag == 1):
@@ -311,15 +280,14 @@ class Epdiff2D(nn.Module):
     ##(Dv)^T)*m and (Dv)*\phi
     def complex_corr(self, in_velo, in_momen, CDcoeff, flag): #in_velo:u     in_momen:velocity (not momentum)
         if (flag == 1):
-            jx,jy,jz = self.JacobianTranspose(CDcoeff,in_velo)
+            jx,jy= self.JacobianTranspose(CDcoeff,in_velo)
         if (flag == 0):
-            jx,jy,jz = self.Jacobian(CDcoeff,in_velo)
+            jx,jy= self.Jacobian(CDcoeff,in_velo)
 
         momen_sp = self.fourier2spatial_bandlimi(in_momen)
         jx_sp = self.fourier2spatial_bandlimi(jx)    
         jy_sp = self.fourier2spatial_bandlimi(jy)
-        jz_sp = self.fourier2spatial_bandlimi(jz)
-        velo_sp =  self.fourier2spatial_bandlimi(in_velo)
+        velo_sp =  self.fourier2spatial_bandlimi(in_velo)       # ? Is this used in the code?
 
 
         """ temp1 = mul_vec_corr(jx_sp, velo_sp, flag);
@@ -329,20 +297,17 @@ class Epdiff2D(nn.Module):
         #######     nellie    ########
         temp1 = self.mul_vec_corr(jx_sp, momen_sp, flag);
         temp2 = self.mul_vec_corr(jy_sp, momen_sp, flag);
-        temp3 = self.mul_vec_corr(jz_sp, momen_sp, flag);
 
 
         DvTranm_sp = torch.zeros(self.truncX,self.truncY,self.truncZ,3,dtype=torch.cfloat).to(self.device)
         DvTranm_sp[...,0] = torch.sum(temp1,dim=-1)
         DvTranm_sp[...,1] = torch.sum(temp2,dim=-1)
-        DvTranm_sp[...,2] = torch.sum(temp3,dim=-1)
 
         
         #     print (temp1 )
         DvTranm_grid = self.spatial2fourier_bandlimi(DvTranm_sp)
-        DvTranm =DvTranm_grid.reshape(self.truncX*self.truncY*self.truncZ*3)
+        DvTranm =DvTranm_grid.reshape(self.truncX*self.truncY*2)
         return DvTranm 
-
 
     def adjoint (self, in_velo, flag):
         momen = self.Lcoeff*in_velo                        
@@ -354,15 +319,18 @@ class Epdiff2D(nn.Module):
         return dv
 
     def div_CD (self, input_vect):
-        jx,jy,jz = self.Jacobian(self.CDcoeff,input_vect)
-        div_mv=jx+jy+jz
+        jx,jy = self.Jacobian(self.CDcoeff,input_vect)
+        div_mv=jx+jy
         return div_mv
 
     def multi_tensor(self, inputvec):
-        outputvec = inputvec.view(1,1,3,1).repeat(1,1,1,1)
+        # outputvec = inputvec.view(1,1,3,1).repeat(1,1,1,1)
+        outputvec = inputvec.view(1, 1, 2, 1).repeat(1, 1, 1, 1) # ? Is this used in the code?
         return outputvec 
+    
+    #This one I think is correct (still need to check)
     def complex_conv_basic (self, input_vec1, input_vec2):
-        #input_vec1 and input_vec2 should be complex-valued 3X1 torch.tensor vectors
+        #input_vec1 and input_vec2 should be complex-valued 2X1 torch.tensor vectors
         real_1 = self.multi_tensor ((input_vec1.real))
         imag_1 = self.multi_tensor (input_vec1.imag)
         real_2 = self.multi_tensor (input_vec2.real)
@@ -387,40 +355,49 @@ class Epdiff2D(nn.Module):
         real_vec = conv_val_r[:,:,:,1]
         imag_vec = conv_val_i[:,:,:,1]
         
-        re= torch.tensor([complex(real_vec[:,:,0],imag_vec[:,:,0]),complex(real_vec[:,:,1],imag_vec[:,:,1]),complex(real_vec[:,:,2],imag_vec[:,:,2])])
+        re= torch.tensor([complex(real_vec[:,:,0],imag_vec[:,:,0]),complex(real_vec[:,:,1],imag_vec[:,:,1])])
         return re
+
+    #Same here
     def complex_conv(self,in_velo, in_momen):
         momen_sp = self.fourier2spatial_bandlimi(in_momen)
         velo_sp =  self.fourier2spatial_bandlimi(in_velo)
-        mv_sp = torch.zeros(self.truncX,self.truncY,self.truncZ,3,dtype=torch.cfloat)
+        mv_sp = torch.zeros(self.truncX,self.truncY,2,dtype=torch.cfloat)
         for i in range (0, self.truncX):
             for j in range (0, self.truncY):
-                for k in range (0, self.truncZ):
-                    vec1= momen_sp[i,j,k,:]     #[3]
-                    vec2= velo_sp[i,j,k,:]      #[3]
-                    mv_sp[i,j,k,:] = self.complex_conv_basic(vec1,vec2)
-        #mv_sp = complex_conv_basic(momen_sp, velo_sp);
+                vec1= momen_sp[i,j,:]     #[2]
+                vec2= velo_sp[i,j,:]      #[2]
+                mv_sp[i,j,:] = self.complex_conv_basic(vec1,vec2)
         mv_grid = self.spatial2fourier_bandlimi(mv_sp)
-        mv = mv_grid.reshape(self.truncX*self.truncY*self.truncZ*3)
+        mv = mv_grid.reshape(self.truncX*self.truncY*2)
         div_val = self.div_CD(mv)
         return div_val
+        # momen_sp = self.fourier2spatial_bandlimi(in_momen)
+        # velo_sp =  self.fourier2spatial_bandlimi(in_velo)
+        # mv_sp = torch.zeros(self.truncX,self.truncY,self,2,dtype=torch.cfloat)
+        # for i in range (0, self.truncX):
+        #     for j in range (0, self.truncY):
+        #         vec1= momen_sp[i,j,:]     #[3]
+        #         vec2= velo_sp[i,j,:]      #[3]
+        #         mv_sp[i,j,:] = self.complex_conv_basic(vec1,vec2)
+        # #mv_sp = complex_conv_basic(momen_sp, velo_sp);
+        # mv_grid = self.spatial2fourier_bandlimi(mv_sp)
+        # mv = mv_grid.reshape(self.truncX*self.truncY*2)
+        # div_val = self.div_CD(mv)
+        # return div_val
 
-
+    #Still to check the next 2 functions
     def forward_shooting(self, u0, v0spatial, dt=-0.1):
-        v0spatial = v0spatial.permute(0,2,3,4,1)[0]
+        v0spatial = v0spatial.permute(0,2,3,1)[0]
         v0 = self.spatial2fourier(v0spatial) #[10125]  3*15*15*15
         #######   Lcoeff : V˜ → M˜ ∗ maps v to M (momentum)     Kcoeff: M˜ →  V˜
         # v0 = Kcoeff*v0                                  #[10125]  3*15*15*15
         du = self.complex_corr(u0,v0, self.CDcoeff,0)
         u0 = u0 + (du+v0)*dt
         return u0
-
-
-        
-
     def forward_shooting_v(self,in_velo,num_steps):
         if in_velo.shape[0]==1:
-            v0spatial = in_velo.permute(0,2,3,4,1)[0]  # move channel to the last dimension
+            v0spatial = in_velo.permute(0,2,3,1)[0]  # move channel to the last dimension
         else:
             v0spatial = in_velo
 
@@ -434,14 +411,14 @@ class Epdiff2D(nn.Module):
             v_seq.append(self.fourier2spatial(v0))
         return v_seq
 
-
+    #This one i think is correct
     def forward_shooting_v_and_phiinv(self,in_velo,num_steps):
         if in_velo.shape[0]==1:
-            v0spatial = in_velo.permute(0,2,3,4,1)[0]  # move channel to the last dimension
+            v0spatial = in_velo.permute(0,2,3,1)[0]  # move channel to the last dimension
         else:
             v0spatial = in_velo
 
-        v0 = self.spatial2fourier(v0spatial) #[10125]  3*15*15*15
+        v0 = self.spatial2fourier(v0spatial) #[10125]  #in 2D: 3*15*15 ??? 
         dt = 1/num_steps
         v_seq = []
         v_seq_fre = []

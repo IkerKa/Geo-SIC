@@ -77,7 +77,6 @@ class DataLoaderHandler:
     
     def save_dataloader(self, file_path='dataloader.pt'):
         torch.save(self.dataloader, file_path)
-        print(f"Dataloader guardado en '{file_path}'")
     
     def show_example(self):
         for batch in self.dataloader:

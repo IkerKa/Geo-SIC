@@ -99,6 +99,20 @@ def visualize_atlas_2D(atlas):
     plt.axis('off')  # Hide axis for a cleaner view
     plt.show()
 
+
+def visualize_loss(losses):
+    """
+    Visualizes the loss values.
+
+    Args:
+        losses (list): List of loss values.
+    """
+    plt.plot(losses)
+    plt.title("Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.show()
+
 def get_device():
     if torch.cuda.is_available():
         return "cuda"
@@ -231,6 +245,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
 
     running_loss = 0
     total = 0
+    loss_per_epoch = []
 
     # Get an initialization of the atlas
     for ave_scan in aveloader:
@@ -257,10 +272,14 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     logger.banner("Training started")
     
     for epoch in range(para.solver.epochs):
+        #save the current atlas in atlas_snapshots (and the raw file)
+        save_atlas_2D(atlas, f'atlas_snapshots/atlas_epoch_{epoch}.png')
+        save_atlas(atlas, f'atlas_snapshots/atlas_epoch_{epoch}.nii.gz')
+
         net.train()
-        logger.info(message=f'Epoch: {epoch} & Current loss: {running_loss}')
+        logger.divider(f'Epoch: {epoch} & Current loss: {total}')
         for j, tar_bch in enumerate(trainloader):
-            logger.info(message=f'Batch: {j}')
+            logger.divider(f'Batch: {j}')
             #-take the dimensions of the batch for 2D images.
             logger.info(message=f"Batch shape: {tar_bch.shape}")
 
@@ -285,7 +304,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             identity = get_grid2D(img_size, dev).permute([0, 3, 2, 1])
             # epd = Epdiff(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
             epd = Epdiff2D(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
-            logger.divider("Math part")
+            # logger.divider("Math part")
 
             for b_id in range(b):   #adapted to 2D images
                 v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, 2))
@@ -307,6 +326,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             optimizer.step()
 
             running_loss += loss_total.item()
+            loss_per_epoch.append(loss_total.item())
             total += running_loss
             running_loss = 0.0
 
@@ -314,7 +334,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             
             logger.info(message=f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
             logger.info(message=f"--Atlas gradient norm: {torch.norm(atlas.grad)}")
-            
+
 
 
         #if epoch >= para.model.pretrain_epoch:
@@ -323,6 +343,9 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     
     logger.success(message="Training finished")
     save_atlas_2D(atlas, 'final_atlas.png')
+
+    #plot the loss per epoch
+    visualize_loss(loss_per_epoch)
 
     return atlas
     
@@ -442,7 +465,7 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
 def main():
 
 
-    lg = log()
+    lg = log(log_file='aplication.log')
 
     parser = argparse.ArgumentParser(description='Run Atlas Trainer')
     parser.add_argument('--json_file', type=str, required=True, help='Name of the JSON file')
@@ -458,9 +481,11 @@ def main():
     # print(f'Running Atlas Trainer with JSON file: {json_file}')
 
     if args.two_dims:
+        lg.custom("Running Atlas Trainer with 2D images", "green")
         datadir = 'datasets/jsons/circle.ndjson'
         #load the ndjson file and get the dimensions of the image
-        dataset = GoogleDrawDataset2d(datadir, samples=40)
+        lg.info(message=f"Loading dataset from: {datadir}")
+        dataset = GoogleDrawDataset2d(datadir, samples=120)
         trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
         aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -469,7 +494,8 @@ def main():
 
 
         datahandler = DataLoaderHandler(ndjson_file=datadir, samples=5, resize=256, batch_size=16)
-        # datahandler.show_example()
+        datahandler.show_example()
+        datahandler.save_dataloader('dataloader.pt')
 
         #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
         for batch in trainloader:

@@ -534,7 +534,7 @@ def main():
         #load the ndjson file and get the dimensions of the image
         lg.info(message=f"Loading dataset from: {datadir}")
         dataset = MHD2DDataset(datadir)
-        trainloader = DataLoader(dataset, batch_size=8, shuffle=True)   # ? Batch size?
+        trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
         aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
         #log the sizes of the dataset 2D

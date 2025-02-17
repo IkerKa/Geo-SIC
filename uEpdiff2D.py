@@ -174,10 +174,10 @@ class Epdiff2D(nn.Module):
         return scratch_sp
     
     def spatial2fourier_bandlimi(self,input_vec):
-        [m,n,q,c]=input_vec.shape
+        [m,n,c]=input_vec.shape
         scracth_cp = torch.zeros(self.truncX,self.truncY, 2 ,dtype=torch.cfloat).to(self.device)
         for i in range (0,c):
-            scracth_cp[...,i]=torch.fft.fftshift(torch.fft.fftn((input_vec[...,i].reshape(m,n,q)), dim=(-2,-1)), dim=(-2,-1))/(self.truncX*self.truncY)
+            scracth_cp[...,i]=torch.fft.fftshift(torch.fft.fftn((input_vec[...,i].reshape(m,n)), dim=(-2,-1)), dim=(-2,-1))/(self.truncX*self.truncY)
             # scracth_cp[...,i]=torch.fft.fftn((input_vec[...,i].reshape(m,n,q)))
         return scracth_cp
 
@@ -299,7 +299,7 @@ class Epdiff2D(nn.Module):
         temp2 = self.mul_vec_corr(jy_sp, momen_sp, flag);
 
 
-        DvTranm_sp = torch.zeros(self.truncX,self.truncY,self.truncZ,3,dtype=torch.cfloat).to(self.device)
+        DvTranm_sp = torch.zeros(self.truncX,self.truncY,2,dtype=torch.cfloat).to(self.device)
         DvTranm_sp[...,0] = torch.sum(temp1,dim=-1)
         DvTranm_sp[...,1] = torch.sum(temp2,dim=-1)
 

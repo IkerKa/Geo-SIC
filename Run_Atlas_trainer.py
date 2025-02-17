@@ -25,6 +25,7 @@ from losses import NCC, MSE, Grad
 from networks import UnetDense  
 from SitkDataSet import SitkDataset as SData
 from uEpdiff import Epdiff
+from uEpdiff2D import Epdiff2D
 from networks import *
 import argparse
 import matplotlib.pyplot as plt # type: ignore
@@ -276,21 +277,22 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             tar_bch_img = tar_bch.to(dev).float()
 
             #pass the atlas and the target image to the network
-            _ , momentum, latent_feat  = net(atlas_bch, tar_bch_img, registration=True) # ? latent feat??
+            y_src, momentum, latent_feat  = net(atlas_bch, tar_bch_img, registration=True) # ? y_src and latent_feat is not used
             momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
             
             #MATHS things
             img_size = w    # ASSUMING SQUARE IMAGES
             identity = get_grid2D(img_size, dev).permute([0, 3, 2, 1])
-            epd = Epdiff(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
-
+            # epd = Epdiff(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
+            epd = Epdiff2D(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
             logger.divider("Math part")
+
             for b_id in range(b):   #adapted to 2D images
                 v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, 2))
                 velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h, 2)  
                 reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
                 num_steps = para.solver.Euler_steps
-                v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)  
+                v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)    # ! Bottleneck for complexity
                 phiinv = displacement.unsqueeze(0) + identity
                 phiinv_bch[b_id,...] = phiinv 
                 reg_save[b_id,...] = reg_temp
@@ -310,11 +312,12 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
 
             #debug information after epoch
             
-            print(f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
-            print(f"--RUNNING LOSS: {running_loss}")
+            logger.info(message=f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
+            logger.info(message=f"--Atlas gradient norm: {torch.norm(atlas.grad)}")
+            
 
 
-
+        #if epoch >= para.model.pretrain_epoch:
         opt.step()
         opt.zero_grad() 
     

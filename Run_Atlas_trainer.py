@@ -280,9 +280,11 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
             
             #MATHS things
-            identity = get_grid2D(w, h, dev).permute([0, 3, 2, 1])
+            img_size = w    # ASSUMING SQUARE IMAGES
+            identity = get_grid2D(img_size, dev).permute([0, 3, 2, 1])
             epd = Epdiff(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
 
+            logger.divider("Math part")
             for b_id in range(b):   #adapted to 2D images
                 v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, 2))
                 velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h, 2)  

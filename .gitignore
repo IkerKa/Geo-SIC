@@ -162,8 +162,14 @@ cython_debug/
 datasets/jsons/
 
 datasets/circle/
+
+datasets/mhd/
+
+datasets/dcm/
 datasets_aux/
 
 datasets_npy/
 
 datasets_npz/
+
+atlas_snapshots/

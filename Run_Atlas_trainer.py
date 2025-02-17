@@ -4,6 +4,7 @@
 from os import PathLike
 from pathlib import Path
 from signal import pause
+import time
 import numpy as np
 import SimpleITK as sitk # type: ignore
 import os, glob
@@ -109,8 +110,21 @@ def visualize_loss(losses):
     """
     plt.plot(losses)
     plt.title("Loss")
-    plt.xlabel("Epoch")
+    plt.xlabel("Batch")
     plt.ylabel("Loss")
+    plt.show()
+
+def visualize_time(time_values):
+    """
+    Visualizes the time values.
+
+    Args:
+        time_values (list): List of time values.
+    """
+    plt.plot(time_values)
+    plt.title("Time")
+    plt.xlabel("Epoch")
+    plt.ylabel("Time")
     plt.show()
 
 def get_device():
@@ -246,6 +260,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     running_loss = 0
     total = 0
     loss_per_epoch = []
+    times = []
 
     # Get an initialization of the atlas
     for ave_scan in aveloader:
@@ -272,6 +287,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     logger.banner("Training started")
     
     for epoch in range(para.solver.epochs):
+        init = time.time()
         #save the current atlas in atlas_snapshots (and the raw file)
         save_atlas_2D(atlas, f'atlas_snapshots/atlas_epoch_{epoch}.png')
         save_atlas(atlas, f'atlas_snapshots/atlas_epoch_{epoch}.nii.gz')
@@ -340,13 +356,17 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         #if epoch >= para.model.pretrain_epoch:
         opt.step()
         opt.zero_grad() 
+        
+        end = time.time()
+        times.append(end - init)
     
     logger.success(message="Training finished")
     save_atlas_2D(atlas, 'final_atlas.png')
 
     #plot the loss per epoch
     visualize_loss(loss_per_epoch)
-
+    visualize_time(times)
+    
     return atlas
     
 def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev):

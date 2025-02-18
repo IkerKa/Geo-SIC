@@ -14,4 +14,4 @@ if __name__ == "__main__":
     data_loader_handler.show_example()
 
     # Save the DataLoader
-    # data_loader_handler.save_dataloader(file_path='dataloader.pt')
+    data_loader_handler.save_dataloader(file_path='dataloaderDCM.pt')

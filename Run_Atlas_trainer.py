@@ -35,6 +35,8 @@ from datasets.datasetloader3d import MHD2DDataset
 from datasets.datasetloader3d import DataLoaderHandler as d3d
 import SimpleITK as sitk # type: ignore
 
+from skimage.metrics import structural_similarity as ssim # type: ignore
+
 #logger
 from logger import Logger as log 
 
@@ -43,8 +45,26 @@ torch.cuda.empty_cache()
 
 
 
+#--a bunch of functions that are metrics--
+def compute_ssim_metric(atlas_img, target_img):
+    # Convert tensors to numpy arrays (assume they are in [1, H, W])
+    atlas_np = atlas_img.squeeze().detach().cpu().numpy()
+    target_np = target_img.squeeze().detach().cpu().numpy()
+    ssim_val = ssim(atlas_np, target_np, data_range=target_np.max() - target_np.min())
+    return ssim_val
+def compute_loss_components(dfm, target_img, reg_save, weight_reg):
+    # Compute individual loss components
+    distance_loss = F.mse_loss(dfm, target_img)
+    regularity_loss = reg_save.sum()
+    total_loss = distance_loss + weight_reg * regularity_loss
+    return distance_loss.item(), regularity_loss.item(), total_loss
 
-
+def compute_atlas_gradient_metrics(atlas):
+    # Compute norm, mean and max of atlas gradients
+    grad_norm = torch.norm(atlas.grad)
+    grad_mean = torch.mean(torch.abs(atlas.grad))
+    grad_max = torch.max(torch.abs(atlas.grad))
+    return grad_norm.item(), grad_mean.item(), grad_max.item()
 
 
 #function to obtain the average atlas from a set of images in order to compare it with the final atlas
@@ -265,12 +285,21 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     times = []
 
     # Get an initialization of the atlas
-    for ave_scan in aveloader:
-        # print(ave_scan)
-        logger.info(message=f"Average scan shape: {ave_scan.shape}")
-        # atlas, temp = ave_scan
-        atlas = ave_scan
-        break;
+    # for ave_scan in aveloader:
+    #     # print(ave_scan)
+    #     logger.info(message=f"Average scan shape: {ave_scan.shape}")
+    #     # atlas, temp = ave_scan
+    #     atlas = ave_scan
+    #     break;
+
+    random_idx = random.randint(0, len(aveloader)-1)
+    for idx, ave_scan in enumerate(aveloader):
+        if idx == random_idx:
+            atlas = ave_scan
+            logger.info(message=f"Average scan shape: {ave_scan.shape} from index {idx}")
+            visualize_atlas_2D(atlas)
+            break
+
 
     # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
     atlas.requires_grad=True
@@ -348,10 +377,10 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             total += running_loss
             running_loss = 0.0
 
-            #debug information after epoch
-            
-            logger.info(message=f"--Atlas gradient, max: {atlas.grad.max()}, min: {atlas.grad.min()}")
-            logger.info(message=f"--Atlas gradient norm: {torch.norm(atlas.grad)}")
+            #metrics
+            grad_norm, grad_mean, grad_max = compute_atlas_gradient_metrics(atlas)
+            logger.info(message=f"--Atlas gradient, max: {grad_max}, min: {grad_mean}")
+            logger.info(message=f"--Atlas gradient norm: {grad_norm}")
 
 
 
@@ -363,7 +392,8 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         times.append(end - init)
     
     logger.success(message="Training finished")
-    save_atlas_2D(atlas, 'final_atlas.png')
+    save_atlas_2D(atlas, f'atlas_snapshots/final_atlas.png')
+    save_atlas(atlas, f'atlas_snapshots/final_atlas.nii.gz')
 
     #plot the loss per epoch
     visualize_loss(loss_per_epoch)
@@ -494,14 +524,14 @@ def main():
 
     dev = get_device()
     para = read_yaml('./parameters.yml')
-    two_dims = 0
+    two_dims = 1
 
     if two_dims == 1:
         lg.custom("Running Atlas Trainer with 2D images", "green")
         datadir = 'datasets/jsons/circle.ndjson'
         #load the ndjson file and get the dimensions of the image
         lg.info(message=f"Loading dataset from: {datadir}")
-        dataset = GoogleDrawDataset2d(datadir, samples=120)
+        dataset = GoogleDrawDataset2d(datadir, samples=200)
         trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
         aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -511,7 +541,7 @@ def main():
 
         datahandler = DataLoaderHandler(ndjson_file=datadir, samples=5, resize=256, batch_size=16)
         datahandler.show_example()
-        datahandler.save_dataloader('dataloader.pt')
+        datahandler.save_dataloader('dataloaderCIRCLES.pt')
 
         #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
         for batch in trainloader:

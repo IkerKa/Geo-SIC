@@ -10,7 +10,7 @@ from sklearn.metrics import mean_squared_error
 
 # Paths
 atlas_snapshots_path = './atlas_snapshots/'
-original_image_path = './datasets/yovani.jpg'
+original_image_path = './datasets/chloe.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale
 atlas_images = []
@@ -57,6 +57,6 @@ def update(frame_idx):
 ani = FuncAnimation(fig, update, frames=len(frames_resized), interval=500, blit=False, repeat=True)
 
 # Opcional: guardar la animación como GIF (requiere ImageMagick o FFmpeg)
-# ani.save('final_result.gif', writer='imagemagick', fps=2)
+ani.save('final_result.gif', writer='imagemagick', fps=2)
 
 plt.show()

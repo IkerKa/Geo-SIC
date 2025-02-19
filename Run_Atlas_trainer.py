@@ -33,6 +33,8 @@ import matplotlib.pyplot as plt # type: ignore
 from datasets.datasetloader import GoogleDrawDataset2d, DataLoaderHandler
 from datasets.datasetloader3d import MHD2DDataset
 from datasets.datasetloader3d import DataLoaderHandler as d3d
+from datasets.createDataset import DataLoaderHandler as d2d
+from datasets.createDataset import ImageTransformDataset
 import SimpleITK as sitk # type: ignore
 
 from skimage.metrics import structural_similarity as ssim # type: ignore
@@ -524,7 +526,7 @@ def main():
 
     dev = get_device()
     para = read_yaml('./parameters.yml')
-    two_dims = 1
+    two_dims = 2
 
     if two_dims == 1:
         lg.custom("Running Atlas Trainer with 2D images", "green")
@@ -558,7 +560,7 @@ def main():
 
         # pause();
 
-    else:
+    elif two_dims == 0:
         lg.custom("Running Atlas Trainer with Brain slices", "green")
         datadir = 'datasets/dcm/'
         #load the ndjson file and get the dimensions of the image
@@ -587,7 +589,37 @@ def main():
     
         combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
         net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
+    elif two_dims == 2:
+        #created dataset
+        lg.custom("Running Atlas Trainer with 2D images", "green")
+        datadir = 'datasets/chloe.jpg'
+        #load the ndjson file and get the dimensions of the image
+        lg.info(message=f"Loading dataset from: {datadir}")
+        dataset = ImageTransformDataset(datadir, samples=300)
+        trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
+        aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
+
+        #log the sizes of the dataset 2D
+        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
+
+
+        datahandler = d2d(image_path=datadir,batch_size=16)
+        datahandler.show_example()
+        datahandler.save_dataloader('dataloaderYOVANI.pt')
+
+        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
+        for batch in trainloader:
+            image = batch[0]
+            lg.info(message=f"Image shape: {image.shape}")
+            break
+
+        xDim, yDim = image.shape[1], image.shape[2]
+        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
+
     
+        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
+        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
+
     #plot the average atlas
     # get_average_atlas(aveloader, _debug=True)
     

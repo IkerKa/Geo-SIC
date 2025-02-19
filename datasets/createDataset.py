@@ -10,7 +10,7 @@ class ImageTransformDataset(Dataset):
     """
     Dataset to create multiple distorted (elastic deformed) versions of an input image.
     """
-    def __init__(self, image_path, samples=100, transform=None):
+    def __init__(self, image_path, samples=100, transform=None, size=None):
         """
         Args:
             image_path (str): Path to the input image.
@@ -29,7 +29,13 @@ class ImageTransformDataset(Dataset):
         for _ in range(self.samples):
             img = self.image.copy()
             #resize to get a squared image
-            img = ImageOps.fit(img, (256, 256), method=0, bleed=0.0, centering=(0.5, 0.5))
+            if self.size is not None:
+                new_size = (self.size, self.size)
+            else:
+                width, height = img.size
+                new_size = 2 ** int(np.log2(min(width, height) // 2))
+                
+            img = ImageOps.fit(img, (new_size, new_size), method=0, bleed=0.0, centering=(0.5, 0.5))
             #gray scale
             img = self.apply_random_transformations(img)
             distorted_images.append(img)
@@ -68,6 +74,7 @@ class ImageTransformDataset(Dataset):
             deformed = map_coordinates(image_np, indices, order=1, mode='reflect').reshape(shape)
         # Convertir de nuevo a imagen PIL
         return Image.fromarray(deformed.astype(np.uint8))
+    
     
     def apply_random_transformations(self, img):
         """

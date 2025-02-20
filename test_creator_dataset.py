@@ -3,10 +3,10 @@ from datasets.createDataset import DataLoaderHandler
 
 def main(image_path, samples, batch_size):
     data_handler = DataLoaderHandler(image_path, samples=samples, batch_size=batch_size)
-    for i in range(10):
-        data_handler.show_example()
+    # for i in range(10):
+    #     data_handler.show_example()
     # data_handler.save_dataloader()
-
+    data_handler.plot_average_image()
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test ImageTransformDataset and DataLoaderHandler")
     parser.add_argument("image_path", type=str, help="Path to the input image")

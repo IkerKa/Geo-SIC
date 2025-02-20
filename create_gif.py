@@ -7,15 +7,23 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 # Paths
-atlas_snapshots_path = './atlas_snapshots/'
-original_image_path = './datasets/eye.jpg'
+atlas_snapshots_path = './backup/b6'
+original_image_path = './datasets/images/chloe.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale
 atlas_images = []
-for file_name in sorted(os.listdir(atlas_snapshots_path)):
-    if file_name.endswith('.png'):
-        file_path = os.path.join(atlas_snapshots_path, file_name)
-        atlas_images.append(Image.open(file_path).convert('L'))
+for i, file in enumerate(os.listdir(atlas_snapshots_path)):
+    if not file.endswith('.png'):
+        continue
+    number = int(file.split('_')[-1].split('.')[0])
+    atlas_images.append((number, Image.open(os.path.join(atlas_snapshots_path, file)).convert('L')))
+
+# Sort images by epoch number
+atlas_images.sort(key=lambda x: x[0])
+atlas_images = [img for _, img in atlas_images]
+
+   
+
 
 if not atlas_images:
     raise ValueError("No se encontraron imágenes en atlas_snapshots_path.")

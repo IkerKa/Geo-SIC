@@ -35,7 +35,8 @@ class ImageTransformDataset(Dataset):
                 new_size = (self.size, self.size)
             else:
                 width, height = img.size
-                new_size = 2 ** int(np.log2(min(width, height) // 4))
+                new_size = 2 ** int(np.log2(min(width, height) // 2))
+                # print(f"Resizing image to {new_size}x{new_size}")
                 
             img = ImageOps.fit(img, (new_size, new_size), method=0, bleed=0.0, centering=(0.5, 0.5))
             #gray scale
@@ -113,8 +114,23 @@ class DataLoaderHandler:
     def show_example(self):
         for batch in self.dataloader:
             img = batch[0].squeeze().numpy()
-            plt.imshow(img)
+            #gray scale
+            plt.imshow(img, cmap="gray")
             plt.title("Example of distorted image")
             plt.axis("off")
             plt.show()
             break
+
+    def plot_average_image(self):
+        """
+        Muestra la imagen promedio de todas las imágenes distorsionadas.
+        """
+        avg_image = np.zeros_like(np.array(self.dataset.distorted_images[0], dtype=np.float32))
+        for img in self.dataset.distorted_images:
+            # print(len(self.dataset.distorted_images))
+            avg_image += np.array(img)
+        avg_image /= len(self.dataset.distorted_images)
+        plt.imshow(avg_image, cmap='gray')
+        plt.title("Average Distorted Image")
+        plt.axis('off')
+        plt.show()

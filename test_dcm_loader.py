@@ -11,7 +11,8 @@ if __name__ == "__main__":
     )
 
     # Show an example image
-    data_loader_handler.show_example()
+    for i in range(10):
+        data_loader_handler.show_example()
 
     # Save the DataLoader
-    data_loader_handler.save_dataloader(file_path='dataloaderDCM.pt')
+    # data_loader_handler.save_dataloader(file_path='dataloaderDCM.pt')

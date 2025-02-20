@@ -5,12 +5,10 @@ import matplotlib
 matplotlib.use('TkAgg')  # Forzar un backend interactivo
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from skimage.metrics import structural_similarity as ssim
-from sklearn.metrics import mean_squared_error
 
 # Paths
 atlas_snapshots_path = './atlas_snapshots/'
-original_image_path = './datasets/chloe.jpg'
+original_image_path = './datasets/eye.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale
 atlas_images = []
@@ -32,24 +30,18 @@ original_array = np.array(original_image)
 # Resize frames to the same size as the original image
 frames_resized = [np.array(img.resize(original_array.shape[::-1])) for img in atlas_images]
 
-# Create the figure with two subplots
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10), dpi=100)
+# Create the figure
+fig, ax = plt.subplots(figsize=(10, 10), dpi=100)
 
-# Display the original image in the first subplot
-ax1.imshow(original_array, cmap='gray')
-ax1.axis('off')
-ax1.set_title("Original Image")
-
-# Configure the second subplot for the animation
-im = ax2.imshow(frames_resized[0], cmap='gray')
-ax2.axis('off')
-title = ax2.set_title("Animated Atlas")
+# Configure the subplot for the animation
+im = ax.imshow(frames_resized[0], cmap='gray')
+ax.axis('off')
+title = ax.set_title("Animated Atlas")
 
 def update(frame_idx):
     frame = frames_resized[frame_idx]
     im.set_data(frame)
-    # Calculate SSIM and MSE between the original image and the current frame
-    # Update the title with epoch ID, SSIM value, and MSE value
+    # Update the title with epoch ID
     title.set_text(f"Epoch: {frame_idx + 1}")
     return im, title
 
@@ -57,6 +49,6 @@ def update(frame_idx):
 ani = FuncAnimation(fig, update, frames=len(frames_resized), interval=500, blit=False, repeat=True)
 
 # Opcional: guardar la animación como GIF (requiere ImageMagick o FFmpeg)
-ani.save('final_result.gif', writer='imagemagick', fps=2)
+ani.save('final_gif.gif', writer='imagemagick', fps=30)
 
 plt.show()

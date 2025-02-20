@@ -17,12 +17,14 @@ class ImageTransformDataset(Dataset):
             samples (int): Number of distorted samples to generate.
             transform (callable, optional): Additional transformation to apply on the tensor.
         """
+        self.size = size
         self.samples = samples
         self.transform = transform
         self.image = Image.open(image_path).convert("RGB")
         #get the mean of channels to get a gray scale image
         self.image = ImageOps.grayscale(self.image)
         self.distorted_images = self.generate_distorted_images()
+       
 
     def generate_distorted_images(self):
         distorted_images = []
@@ -33,7 +35,7 @@ class ImageTransformDataset(Dataset):
                 new_size = (self.size, self.size)
             else:
                 width, height = img.size
-                new_size = 2 ** int(np.log2(min(width, height) // 2))
+                new_size = 2 ** int(np.log2(min(width, height) // 4))
                 
             img = ImageOps.fit(img, (new_size, new_size), method=0, bleed=0.0, centering=(0.5, 0.5))
             #gray scale
@@ -98,11 +100,11 @@ class ImageTransformDataset(Dataset):
         return image_tensor
 
 class DataLoaderHandler:
-    def __init__(self, image_path, samples=100, batch_size=16):
+    def __init__(self, image_path, samples=100, batch_size=16, size=None):
         self.image_path = image_path
         self.samples = samples
         self.batch_size = batch_size
-        self.dataset = ImageTransformDataset(image_path, samples=samples)
+        self.dataset = ImageTransformDataset(image_path, samples=samples, size=size)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
     
     def save_dataloader(self, file_path='dataloader.pt'):

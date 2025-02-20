@@ -294,16 +294,18 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     #     atlas = ave_scan
     #     break;
 
-    random_idx = random.randint(0, len(aveloader)-1)
-    for idx, ave_scan in enumerate(aveloader):
-        if idx == random_idx:
-            atlas = ave_scan
-            logger.info(message=f"Average scan shape: {ave_scan.shape} from index {idx}")
-            visualize_atlas_2D(atlas)
-            break
-
-
-    # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
+    while True:
+        random_idx = random.randint(0, len(aveloader)-1)
+        for idx, ave_scan in enumerate(aveloader):
+            if idx == random_idx:
+                atlas = ave_scan
+                logger.info(message=f"Average scan shape: {ave_scan.shape} from index {idx}")
+                visualize_atlas_2D(atlas)
+                user_input = input("Do you like this atlas? (yes/no): ").strip().lower()
+                if user_input == 'yes':
+                    break
+        if user_input == 'yes':
+            break   # Instead of getting the initial atlas from the training data, the initialization will be the average of the training data
     atlas.requires_grad=True
     opt = optim.Adam([atlas], lr=para.solver.atlas_lr)  #<---they used a different optimizer for the atlas
 
@@ -592,10 +594,10 @@ def main():
     elif two_dims == 2:
         #created dataset
         lg.custom("Running Atlas Trainer with 2D images", "green")
-        datadir = 'datasets/chloe.jpg'
+        datadir = 'datasets/cuphead.jpg'
         #load the ndjson file and get the dimensions of the image
         lg.info(message=f"Loading dataset from: {datadir}")
-        dataset = ImageTransformDataset(datadir, samples=300)
+        dataset = ImageTransformDataset(datadir, samples=200)
         trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
         aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -605,7 +607,7 @@ def main():
 
         datahandler = d2d(image_path=datadir,batch_size=16)
         datahandler.show_example()
-        datahandler.save_dataloader('dataloaderYOVANI.pt')
+        datahandler.save_dataloader('dataloaderCUPHEAD.pt')
 
         #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
         for batch in trainloader:

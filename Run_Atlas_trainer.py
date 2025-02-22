@@ -35,6 +35,7 @@ from datasets.datasetloader3d import MHD2DDataset
 from datasets.datasetloader3d import DataLoaderHandler as d3d
 from datasets.createDataset import DataLoaderHandler as d2d
 from datasets.createDataset import ImageTransformDataset
+from datasets.shapedsloader import ShapesDataLoaderHandler as sdh
 import SimpleITK as sitk # type: ignore
 
 from skimage.metrics import structural_similarity as ssim # type: ignore
@@ -298,8 +299,13 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         random_idx = random.randint(0, len(aveloader)-1)
         for idx, ave_scan in enumerate(aveloader):
             if idx == random_idx:
-                atlas = ave_scan
-                logger.info(message=f"Average scan shape: {ave_scan.shape} from index {idx}")
+                if len(ave_scan) == 2:
+                    atlas, lbl = ave_scan
+                    logger.info(message=f"Label: {lbl}")
+                else:
+                    atlas = ave_scan
+                # print(atlas)
+                logger.info(message=f"Average scan shape: {atlas.shape} from index {idx}")
                 visualize_atlas_2D(atlas)
                 user_input = input("Do you like this atlas? (yes/no): ").strip().lower()
                 if user_input == 'yes':
@@ -330,6 +336,13 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         net.train()
         logger.divider(f'Epoch: {epoch} & Current loss: {total}')
         for j, tar_bch in enumerate(trainloader):
+
+            if len(tar_bch) == 2:
+                print(tar_bch)
+                tar_bch, lbl = tar_bch
+            else:
+                tar_bch = tar_bch
+                
             logger.divider(f'Batch: {j}')
             #-take the dimensions of the batch for 2D images.
             logger.info(message=f"Batch shape: {tar_bch.shape}")
@@ -594,7 +607,7 @@ def main():
     elif two_dims == 2:
         #created dataset
         lg.custom("Running Atlas Trainer with 2D images", "green")
-        datadir = 'datasets/cuphead.jpg'
+        datadir = 'datasets/images/cuphead.jpg'
         #load the ndjson file and get the dimensions of the image
         lg.info(message=f"Loading dataset from: {datadir}")
         dataset = ImageTransformDataset(datadir, samples=200)
@@ -622,9 +635,41 @@ def main():
         combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
         net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
 
-    #plot the average atlas
-    # get_average_atlas(aveloader, _debug=True)
+    elif two_dims == 3:
+        #shape dataset
+        lg.custom("Running Atlas Trainer with 3D images", "green")
+
+        shapes_folder = "datasets/shapes"
+        object_name = "tree"
+        lg.info(message=f"Loading dataset from: {shapes_folder}")
+
+
+        #log the sizes of the dataset 2D
+
+        datahandler = sdh(shapes_folder, object_name, batch_size=8, resize=128, samples=150)
+        datahandler.show_example()
+        # datahandler.save_dataloader('dataloaderTREE.pt')
+
+        trainloader = DataLoader(datahandler.dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
+        aveloader = DataLoader(datahandler.dataset, batch_size=1, shuffle=False)
+
+
+        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
+        lg.custom(f"Average dataset size: {len(aveloader)}", "green")
+
+
+        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
+        for batch in trainloader:
+            image = batch[0]
+            lg.info(message=f"Image shape: {image.shape}")
+            break
+
+        xDim, yDim = image.shape[1], image.shape[2]
+        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
+
     
+        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
+        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
 
 
     atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev, lg)

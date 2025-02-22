@@ -4,13 +4,14 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 import random
 import matplotlib.pyplot as plt
+import cv2
 from scipy.ndimage import gaussian_filter, map_coordinates
 
 class ImageTransformDataset(Dataset):
     """
     Dataset to create multiple distorted (elastic deformed) versions of an input image.
     """
-    def __init__(self, image_path, samples=100, transform=None, size=None):
+    def __init__(self, image_path, samples=100, transform=None, size=None, shape_seg=None):
         """
         Args:
             image_path (str): Path to the input image.
@@ -18,15 +19,47 @@ class ImageTransformDataset(Dataset):
             transform (callable, optional): Additional transformation to apply on the tensor.
         """
         self.size = size
+        self.shape_seg = shape_seg
         self.samples = samples
         self.transform = transform
         self.image = Image.open(image_path).convert("RGB")
         #get the mean of channels to get a gray scale image
         self.image = ImageOps.grayscale(self.image)
         self.distorted_images = self.generate_distorted_images()
+ 
        
 
+    def apply_segmentation(self):
+        # Convertir la imagen a numpy y asegurarse de que es en escala de grises
+        image_np = np.array(self.image)
+        if len(image_np.shape) == 3:
+            image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+        
+        blurred = cv2.GaussianBlur(image_np, (3, 3), 0)
+        
+        _, mask = cv2.threshold(blurred, 190, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=10)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=10)
+        
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if contours:
+            biggest_contour = max(contours, key=cv2.contourArea)
+            new_mask = np.zeros_like(mask)
+            cv2.drawContours(new_mask, [biggest_contour], -1, 255, thickness=cv2.FILLED)
+        else:
+            new_mask = mask
+        
+        self.image = Image.fromarray(new_mask)
+
     def generate_distorted_images(self):
+
+        if self.shape_seg:
+            #apply the segmentation to work in shape space
+            self.apply_segmentation()
+
         distorted_images = []
         for _ in range(self.samples):
             img = self.image.copy()
@@ -45,17 +78,7 @@ class ImageTransformDataset(Dataset):
         return distorted_images
 
     def elastic_deformation(self, image, alpha_range=(20, 55), sigma_range=(2, 8)):
-        """
-        Aplica una deformación elástica a la imagen.
-        
-        Args:
-            image (PIL.Image): Imagen de entrada.
-            alpha_range (tuple): Rango para el parámetro alpha (intensidad de la deformación).
-            sigma_range (tuple): Rango para el parámetro sigma (suavizado de la deformación).
-        
-        Returns:
-            PIL.Image: Imagen deformada.
-        """
+
         image_np = np.array(image)
         shape = image_np.shape[:2]
         # Take random parameters
@@ -101,11 +124,11 @@ class ImageTransformDataset(Dataset):
         return image_tensor
 
 class DataLoaderHandler:
-    def __init__(self, image_path, samples=100, batch_size=16, size=None):
+    def __init__(self, image_path, samples=100, batch_size=16, size=None, shape_seg=None):
         self.image_path = image_path
         self.samples = samples
         self.batch_size = batch_size
-        self.dataset = ImageTransformDataset(image_path, samples=samples, size=size)
+        self.dataset = ImageTransformDataset(image_path, samples=samples, size=size, shape_seg=shape_seg)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
     
     def save_dataloader(self, file_path='dataloader.pt'):

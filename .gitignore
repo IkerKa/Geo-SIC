@@ -173,3 +173,5 @@ datasets_npy/
 datasets_npz/
 
 atlas_snapshots/
+
+datasets/shapes/

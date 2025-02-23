@@ -3,144 +3,112 @@ import sys
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from PIL import Image
+from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter, map_coordinates
-from torchvision import transforms 
-import torch.nn.functional as F
+from torchvision import transforms
 
-class ShapesDataset(Dataset):
+def elastic_deformation(image, alpha_range=(20, 55), sigma_range=(2, 8)):
+    image_np = np.array(image)
+    shape = image_np.shape[:2]
+    # Parámetros aleatorios
+    alpha = np.random.uniform(*alpha_range)
+    sigma = np.random.uniform(*sigma_range)
+    random_state = np.random.RandomState(None)
+    dx = gaussian_filter((random_state.rand(*shape) * 2 - 1), sigma, mode="constant", cval=0) * alpha
+    dy = gaussian_filter((random_state.rand(*shape) * 2 - 1), sigma, mode="constant", cval=0) * alpha
+    x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+    indices = np.reshape(y + dy, (-1, 1)), np.reshape(x + dx, (-1, 1))
+    if image_np.ndim == 3:
+        deformed = np.zeros_like(image_np)
+        for c in range(image_np.shape[2]):
+            deformed[:, :, c] = map_coordinates(image_np[:, :, c], indices, order=1, mode='reflect').reshape(shape)
+    else:
+        deformed = map_coordinates(image_np, indices, order=1, mode='reflect').reshape(shape)
+    return Image.fromarray(deformed.astype(np.uint8))
+
+class ShapeDataset(Dataset):
     """
-    Dataset to load shape images from a folder containing files with the format {name}-{number}.gif.
-    Allows filtering by the name of the object.
+    Dataset to load images from a directory and convert them to tensors.
     """
-    def __init__(self, shapes_folder, object_name=None, transform=None, resize=128, samples=None):
+    def __init__(self, directory, object_name, transform=None, size=None, nAugment=0):
         """
         Args:
-            shapes_folder (str): Path to the folder containing the images.
-            object_name (str, optional): Name of the object to filter (e.g., "circle").
-                                         If None, all images are loaded.
-            transform (callable, optional): Additional transformation to apply to the image.
-            resize (int or tuple, optional): Desired size to resize the image.
-                                              If an integer, a square size is assumed.
+            directory (str): Path to the directory containing the images.
+            object_name (str): Name of the object to filter (e.g., "circle").
+            transform (callable, optional): Additional transformation to apply on the tensor.
         """
-        self.shapes_folder = shapes_folder
+        self.size = size
         self.transform = transform
-        self.resize = resize
-        self.samples = samples
 
-        # List all .gif files in the folder
-        all_files = [f for f in os.listdir(shapes_folder) if f.endswith('.gif')]
-        # Filter by the object name if specified
-        if object_name is not None:
-            self.files = [f for f in all_files if f.startswith(f"{object_name}-")]
-        else:
-            self.files = all_files
-        self.files.sort()  # To ensure consistent order
-        
+        # -- Get all files in the directory --
+        all_files = [f for f in os.listdir(directory) if f.endswith('.gif')]
+        self.files = [f for f in all_files if f.startswith(f"{object_name}-")]
+        self.files.sort()
 
-        
+        # -- Load images nd convert to grayscale --
+        self.images = [Image.open(os.path.join(directory, f)).convert("RGB") for f in self.files]
+        self.images = [ImageOps.grayscale(img) for img in self.images]
 
-        self.num_original = len(self.files)
-        self.augmented_images = []
-        self.samples = samples if samples is not None else self.num_original
-        if self.samples > 0 and self.samples > self.num_original:
-            num_augmented = self.samples - self.num_original
-            for i in range(num_augmented):
-                idx = i % self.num_original
-                file_name = self.files[idx]
-                file_path = os.path.join(self.shapes_folder, file_name)
-                image = Image.open(file_path).convert("L")
-                deformed = self.elastic_deformation(image)
-                if self.transform:
-                    deformed = self.transform(deformed)
-                image_np = np.array(deformed, dtype=np.float32) / 255.0
-                image_tensor = torch.from_numpy(image_np).unsqueeze(0)
-                self.augmented_images.append(image_tensor)  # Add the augmented image to the list
-    
+        # RESIZE.
+        if size:
+            self.images = [img.resize((size, size)) for img in self.images]
+
+
+        # self.labels = [f.split("-")[1].split(".")[0] for f in self.files]
+        augmentations = []
+        #select a random image and add n random agumentations to the image set
+        for i in range(nAugment):
+            idx = np.random.randint(len(self.images))
+            image = self.images[idx]
+            augmentations.append(elastic_deformation(image))
+
+        self.images += augmentations
+        # self.labels += [f.split("-")[1].split(".")[0] for f in self.files]
+
+
+
     def __len__(self):
-        return self.samples if self.samples is not None else self.num_original
-    
+        return len(self.images)
+
     def __getitem__(self, idx):
-        if idx < self.num_original:
-            file_name = self.files[idx]
-            file_path = os.path.join(self.shapes_folder, file_name)
-            image = Image.open(file_path).convert("L")
-            if self.resize is not None:
-                if isinstance(self.resize, int):
-                    image = image.resize((self.resize, self.resize))
-                elif isinstance(self.resize, tuple):
-                    image = image.resize(self.resize)
-            if self.transform:
-                image = self.transform(image)
-            image_np = np.array(image, dtype=np.float32) / 255.0
-            image_tensor = torch.from_numpy(image_np).unsqueeze(0)
-            label = file_name.split("-")[0]
-            return image_tensor, label
-        else:
-            augmented_idx = idx - self.num_original
-            label = self.files[augmented_idx % self.num_original].split("-")[0]
-            augmented_tensor = self.augmented_images[augmented_idx % len(self.augmented_images)]
-            if self.resize is not None:
-                if isinstance(self.resize, int):
-                    augmented_tensor = F.interpolate(augmented_tensor.unsqueeze(0), size=(self.resize, self.resize), mode='bilinear', align_corners=False).squeeze(0)
-                elif isinstance(self.resize, tuple):
-                    augmented_tensor = F.interpolate(augmented_tensor.unsqueeze(0), size=self.resize, mode='bilinear', align_corners=False).squeeze(0)
-            return augmented_tensor, label
+        # Convert the PIL image to tensor: [C, H, W] and normalize to [0,1]
+        image_np = np.array(self.images[idx], dtype=np.float32) / 255.0
+        image_tensor = torch.from_numpy(image_np).unsqueeze(0)
+        if self.transform:
+            image_tensor = self.transform(image_tensor)
+        return image_tensor
 
-
-    def elastic_deformation(self, image, alpha_range=(20, 55), sigma_range=(2, 8)):
-
-        image_np = np.array(image)
-        shape = image_np.shape[:2]
-        # Take random parameters
-        alpha = np.random.uniform(*alpha_range)
-        sigma = np.random.uniform(*sigma_range)
-        # Generate random deformation fields
-        random_state = np.random.RandomState(None)
-        dx = gaussian_filter((random_state.rand(*shape) * 2 - 1), sigma, mode="constant", cval=0) * alpha
-        dy = gaussian_filter((random_state.rand(*shape) * 2 - 1), sigma, mode="constant", cval=0) * alpha
-        
-        x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
-        indices = np.reshape(y + dy, (-1, 1)), np.reshape(x + dx, (-1, 1))
-
-        if image_np.ndim == 3:
-            deformed = np.zeros_like(image_np)
-            for c in range(image_np.shape[2]):
-                deformed[:, :, c] = map_coordinates(image_np[:, :, c], indices, order=1, mode='reflect').reshape(shape)
-        else:
-            deformed = map_coordinates(image_np, indices, order=1, mode='reflect').reshape(shape)
-        # Convertir de nuevo a imagen PIL
-        return Image.fromarray(deformed.astype(np.uint8))
 class ShapesDataLoaderHandler:
-    """
-    Class to handle the DataLoader for the shapes dataset.
-    """
-    def __init__(self, shapes_folder, object_name, batch_size=16, resize=128, transform=None, samples=None):
-        self.dataset = ShapesDataset(shapes_folder, object_name=object_name, transform=transform, resize=resize, samples=samples)
-        if len(self.dataset) == 0:
-            print(f"No images found for object name '{object_name}'")
-            print(f"Available objects: {', '.join(set(f.split('-')[0] for f in os.listdir(shapes_folder) if f.endswith('.gif')))}")
-            sys.exit(1)
+    def __init__(self, directory, object_name, batch_size=16, size=None, n_aug = 0):
+        self.directory = directory
+        self.batch_size = batch_size
+        self.dataset = ShapeDataset(directory, object_name, size=size, nAugment=n_aug)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
     
+    def save_dataloader(self, file_path='dataloader.pt'):
+        torch.save(self.dataloader, file_path)
+    
     def show_example(self):
+        print(f"Number of images: {len(self.dataset)}")
         for batch in self.dataloader:
-            images, labels = batch
-            # Show the first image of the batch along with its label
-            img = images[0].squeeze().numpy()
+            img = batch[0].squeeze().numpy()
+            #gray scale
             plt.imshow(img, cmap="gray")
-            plt.title(f"Example: {labels[0]}")
+            plt.title("Example of image")
             plt.axis("off")
             plt.show()
             break
 
-    def get_all_images_tensor(self):
+    def plot_average_image(self):
         """
-        Returns a tensor containing all images in the dataset.
+        Muestra la imagen promedio de todas las imágenes.
         """
-        images = [self.dataset[i][0] for i in range(len(self.dataset))]
-        size = images[0].shape[-1]
-        print(f"Size of the images: {size}")
-        return torch.stack(images)
-
+        avg_image = np.zeros_like(np.array(self.dataset.images[0], dtype=np.float32))
+        for img in self.dataset.images:
+            avg_image += np.array(img)
+        avg_image /= len(self.dataset.images)
+        plt.imshow(avg_image, cmap='gray')
+        plt.title("Average Image")
+        plt.axis('off')
+        plt.show()

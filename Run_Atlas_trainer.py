@@ -339,15 +339,15 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
 
             if len(tar_bch) == 2:
                 print(tar_bch)
-                tar_bch, lbl = tar_bch
+                tb, lbl = tar_bch
             else:
-                tar_bch = tar_bch
+                tb = tar_bch
                 
             logger.divider(f'Batch: {j}')
             #-take the dimensions of the batch for 2D images.
-            logger.info(message=f"Batch shape: {tar_bch.shape}")
+            logger.info(message=f"Batch shape: {tb.shape}")
 
-            b, c, w, h = tar_bch.shape
+            b, c, w, h = tb.shape
             #-restart the optimizer gradient
             optimizer.zero_grad()
             #-initialize the phiinv and reg_save tensors
@@ -357,10 +357,10 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             # Now we wont pretrain the atlas building network 
             atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
             atlas_bch = atlas_bch.to(dev).float()
-            tar_bch_img = tar_bch.to(dev).float()
+            tb_img = tb.to(dev).float()
 
             #pass the atlas and the target image to the network
-            y_src, momentum, latent_feat  = net(atlas_bch, tar_bch_img, registration=True) # ? y_src and latent_feat is not used
+            y_src, momentum, latent_feat  = net(atlas_bch, tb_img, registration=True) # ? y_src and latent_feat is not used
             momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
             
             #MATHS things
@@ -381,7 +381,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
                 reg_save[b_id,...] = reg_temp
 
             dfm = Torchinterp2D(atlas_bch,phiinv_bch)
-            Dist = criterion(dfm, tar_bch_img)
+            Dist = criterion(dfm, tb_img)
             Reg_loss =  reg_save.sum()
             loss_total =  Dist + weight_reg * Reg_loss
             loss_total.backward(retain_graph=True)
@@ -409,8 +409,8 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         times.append(end - init)
     
     logger.success(message="Training finished")
-    save_atlas_2D(atlas, f'atlas_snapshots/final_atlas.png')
-    save_atlas(atlas, f'atlas_snapshots/final_atlas.nii.gz')
+    save_atlas_2D(atlas, f'atlas_snapshots/atlas_epoch_{para.solver.epochs}.png')
+    save_atlas(atlas, f'atlas_snapshots/atlas_epoch_{para.solver.epochs}.nii.gz')
 
     #plot the loss per epoch
     visualize_loss(loss_per_epoch)
@@ -475,9 +475,9 @@ def train_network(trainloader, aveloader, net, para, criterion, optimizer, DistT
         net.train()
         print('epoch:', epoch)
         save_atlas(atlas, f'atlas_snapshots/atlas_epoch_{epoch}.nii.gz')
-        for j, tar_bch in enumerate(trainloader):
+        for j, tar_batch in enumerate(trainloader):
             print('-batch:', j)
-            b, c, w, h, l = tar_bch[0].shape
+            b, c, w, h, l = tar_batch[0].shape
             optimizer.zero_grad()
             phiinv_bch = torch.zeros(b, w, h, l, 3).to(dev)
             reg_save = torch.zeros(b, w, h, l, 3).to(dev)
@@ -541,7 +541,7 @@ def main():
 
     dev = get_device()
     para = read_yaml('./parameters.yml')
-    two_dims = 2
+    two_dims = 3
 
     if two_dims == 1:
         lg.custom("Running Atlas Trainer with 2D images", "green")
@@ -646,8 +646,8 @@ def main():
 
         #log the sizes of the dataset 2D
 
-        datahandler = sdh(shapes_folder, object_name, batch_size=8, resize=128, samples=150)
-        datahandler.show_example()
+        datahandler = sdh(shapes_folder, object_name, size=128, n_aug=300)
+        # datahandler.show_example()
         # datahandler.save_dataloader('dataloaderTREE.pt')
 
         trainloader = DataLoader(datahandler.dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?

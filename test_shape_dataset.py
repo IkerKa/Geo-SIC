@@ -12,11 +12,8 @@ if __name__ == "__main__":
     shapes_folder = "datasets/shapes"
     object_name = args.shape
     
-    handler = ShapesDataLoaderHandler(shapes_folder, object_name, batch_size=8, resize=128, samples=args.samples)
+    handler = ShapesDataLoaderHandler(shapes_folder, object_name, size=128, n_aug = 100) #, batch_size=16)# , resize=128) #, samples=args.samples)
     
     # Show an example
     handler.show_example()
     
-    # Get all images in a tensor
-    all_images = handler.get_all_images_tensor()
-    print(f"Total images loaded for {object_name}: {all_images.shape[0]}")

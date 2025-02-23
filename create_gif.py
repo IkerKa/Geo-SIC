@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 # Paths
-atlas_snapshots_path = './backup/b6'
+atlas_snapshots_path = './atlas_snapshots/'
 original_image_path = './datasets/images/chloe.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale

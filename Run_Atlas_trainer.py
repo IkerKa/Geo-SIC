@@ -30,12 +30,13 @@ from uEpdiff2D import Epdiff2D
 from networks import *
 import argparse
 import matplotlib.pyplot as plt # type: ignore
-from datasets.datasetloader import GoogleDrawDataset2d, DataLoaderHandler
-from datasets.datasetloader3d import MHD2DDataset
-from datasets.datasetloader3d import DataLoaderHandler as d3d
-from datasets.createDataset import DataLoaderHandler as d2d
-from datasets.createDataset import ImageTransformDataset
-from datasets.shapedsloader import ShapesDataLoaderHandler as sdh
+# from datasets.datasetloader import GoogleDrawDataset2d, DataLoaderHandler
+# from datasets.datasetloader3d import MHD2DDataset
+# from datasets.datasetloader3d import DataLoaderHandler as d3d
+# from datasets.createDataset import DataLoaderHandler as d2d
+# from datasets.createDataset import ImageTransformDataset
+# from datasets.shapedsloader import ShapesDataLoaderHandler as sdh
+from datasets.datasethandler import DataHandler as dh
 import SimpleITK as sitk # type: ignore
 
 from skimage.metrics import structural_similarity as ssim # type: ignore
@@ -541,136 +542,85 @@ def main():
 
     dev = get_device()
     para = read_yaml('./parameters.yml')
-    two_dims = 3
 
-    if two_dims == 1:
-        lg.custom("Running Atlas Trainer with 2D images", "green")
-        datadir = 'datasets/jsons/circle.ndjson'
-        #load the ndjson file and get the dimensions of the image
-        lg.info(message=f"Loading dataset from: {datadir}")
-        dataset = GoogleDrawDataset2d(datadir, samples=200)
-        trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
-        aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
+    # Prepare the arguments for the different datasets:
+    # -Google Drawings
+    google_datadir = 'datasets/jsons/circle.ndjson'
+    # -Medical Images
+    medical_datadir = 'datasets/dcm/'
+    # -Creating our own dataset
+    image_datadir = 'datasets/images/cuphead.jpg'
+    # -Shapes
+    shape_folder = 'datasets/shapes/'
+    shape_name = 'tree'
 
-        #log the sizes of the dataset 2D
-        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
+    # offer the user to select the dataset
+    lg.custom("Select the dataset you want to use:", "green")
+    lg.custom("1. Google Drawings", "blue")
+    lg.custom("2. Medical Images", "green")
+    lg.custom("3. Custom Images", "yellow")
+    lg.custom("4. Shapes", "purple")
+    lg.divider()
+    dataset_choice = input("Enter the number of the dataset you want to use: ").strip()
+    if dataset_choice != '1' and dataset_choice != '2' and dataset_choice != '3' and dataset_choice != '4':
+        lg.custom("Invalid choice. Exiting...", "red")
+        exit()
+    lg.custom(f"Dataset choice: {dataset_choice}", "red")
+    lg.divider()
 
+    if dataset_choice == '1':
+        # Google Drawings
+        datahandler = dh(
+            dataset_type='google_draw',
+            ndjson_file=google_datadir,
+            samples = 200,
+            resize = (128, 128)
+        )
 
-        datahandler = DataLoaderHandler(ndjson_file=datadir, samples=5, resize=256, batch_size=16)
-        datahandler.show_example()
-        datahandler.save_dataloader('dataloaderCIRCLES.pt')
-
-        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
-        for batch in trainloader:
-            image = batch[0]
-            lg.info(message=f"Image shape: {image.shape}")
-            break
-
-        xDim, yDim = image.shape[1], image.shape[2]
-        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
-
+    elif dataset_choice == '2':
+        # Medical Images
+        datahandler = dh(
+            dataset_type='medical',
+            mhd_folder=medical_datadir
+        )
     
-        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
-        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
+    elif dataset_choice == '3':
+        # Custom Images
+        datahandler = dh(
+            dataset_type='image_transform',
+            image_path=image_datadir,
+            samples=200
+        )
 
-        # pause();
-
-    elif two_dims == 0:
-        lg.custom("Running Atlas Trainer with Brain slices", "green")
-        datadir = 'datasets/dcm/'
-        #load the ndjson file and get the dimensions of the image
-        lg.info(message=f"Loading dataset from: {datadir}")
-        dataset = MHD2DDataset(datadir)
-        trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
-        aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
-
-        #log the sizes of the dataset 2D
-        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
+    elif dataset_choice == '4':
+        # Shapes
+        datahandler = dh(
+            dataset_type='shape',
+            directory=shape_folder,
+            object_name=shape_name,
+            size=128,
+            nAugment=300
+        )
 
 
-        datahandler = d3d(mhd_folder=datadir, batch_size=8)
-        datahandler.show_example()
-        # datahandler.save_dataloader('dataloader.pt')
-
-        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
-        for batch in trainloader:
-            image = batch[0]
-            lg.info(message=f"Image shape: {image.shape}")
-            break
-
-        xDim, yDim = image.shape[1], image.shape[2]
-        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
-
+    # Load the data
+    dataset = datahandler.get_dataset()
     
-        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
-        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
-    elif two_dims == 2:
-        #created dataset
-        lg.custom("Running Atlas Trainer with 2D images", "green")
-        datadir = 'datasets/images/cuphead.jpg'
-        #load the ndjson file and get the dimensions of the image
-        lg.info(message=f"Loading dataset from: {datadir}")
-        dataset = ImageTransformDataset(datadir, samples=200)
-        trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
-        aveloader = DataLoader(dataset, batch_size=1, shuffle=False)
+    trainloader = DataLoader(dataset, batch_size=para.solver.batch_size, shuffle=True)
+    aveloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
-        #log the sizes of the dataset 2D
-        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
+    # plot an example
+    for batch in trainloader:
+        img = batch[0].squeeze().cpu().numpy()
+        xDim, yDim = img.shape
+        plt.imshow(img, cmap='gray')
+        plt.title('Example')
+        plt.axis('off')
+        plt.show()
+        break
 
-
-        datahandler = d2d(image_path=datadir,batch_size=16)
-        datahandler.show_example()
-        datahandler.save_dataloader('dataloaderCUPHEAD.pt')
-
-        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
-        for batch in trainloader:
-            image = batch[0]
-            lg.info(message=f"Image shape: {image.shape}")
-            break
-
-        xDim, yDim = image.shape[1], image.shape[2]
-        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
-
-    
-        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
-        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
-
-    elif two_dims == 3:
-        #shape dataset
-        lg.custom("Running Atlas Trainer with 3D images", "green")
-
-        shapes_folder = "datasets/shapes"
-        object_name = "tree"
-        lg.info(message=f"Loading dataset from: {shapes_folder}")
-
-
-        #log the sizes of the dataset 2D
-
-        datahandler = sdh(shapes_folder, object_name, size=128, n_aug=300)
-        # datahandler.show_example()
-        # datahandler.save_dataloader('dataloaderTREE.pt')
-
-        trainloader = DataLoader(datahandler.dataset, batch_size=para.solver.batch_size, shuffle=True)   # ? Batch size?
-        aveloader = DataLoader(datahandler.dataset, batch_size=1, shuffle=False)
-
-
-        lg.custom(f"Training dataset size: {len(trainloader)}", "green")
-        lg.custom(f"Average dataset size: {len(aveloader)}", "green")
-
-
-        #obtain the dimensions of the image, generic way, take an image and obtain its dimensions
-        for batch in trainloader:
-            image = batch[0]
-            lg.info(message=f"Image shape: {image.shape}")
-            break
-
-        xDim, yDim = image.shape[1], image.shape[2]
-        lg.info(message=f"2D image dimensions: {xDim}, {yDim}")
-
-    
-        combined_loader = zip(trainloader, aveloader )  # ? Why do we need this combined_loader?
-        net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
-
+    # Initialize the network and optimizer
+    net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
 
     atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev, lg)
 

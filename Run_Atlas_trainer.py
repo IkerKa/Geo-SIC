@@ -552,7 +552,7 @@ def main():
     image_datadir = 'datasets/images/cuphead.jpg'
     # -Shapes
     shape_folder = 'datasets/shapes/'
-    shape_name = 'tree'
+    shape_name = 'apple'
 
     # offer the user to select the dataset
     lg.custom("Select the dataset you want to use:", "green")
@@ -599,7 +599,7 @@ def main():
             directory=shape_folder,
             object_name=shape_name,
             size=128,
-            nAugment=300
+            nAugment=0
         )
 
 
@@ -618,6 +618,7 @@ def main():
         plt.axis('off')
         plt.show()
         break
+
 
     # Initialize the network and optimizer
     net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)

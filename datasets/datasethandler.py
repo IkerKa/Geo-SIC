@@ -177,28 +177,21 @@ class ImageTransformDataset(Dataset):
 
     def apply_segmentation(self):
         # Convertir la imagen a numpy y asegurarse de que es en escala de grises
-        image_np = np.array(self.image)
-        if len(image_np.shape) == 3:
-            image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+        image = np.array(self.image)
+
+        blurred = cv2.GaussianBlur(image, (5, 5), 0)
+
+        edges = cv2.Canny(blurred, 50, 150)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        mask = np.zeros_like(image)
+        cv2.drawContours(mask, contours, -1, (255), thickness=cv2.FILLED)
         
-        blurred = cv2.GaussianBlur(image_np, (3, 3), 0)
-        
-        _, mask = cv2.threshold(blurred, 190, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=10)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=10)
-        
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if contours:
-            biggest_contour = max(contours, key=cv2.contourArea)
-            new_mask = np.zeros_like(mask)
-            cv2.drawContours(new_mask, [biggest_contour], -1, 255, thickness=cv2.FILLED)
-        else:
-            new_mask = mask
-        
-        self.image = Image.fromarray(new_mask)
+        result = cv2.bitwise_and(image, image, mask=mask)
+
+        self.image = Image.fromarray(result)
+
 
     def generate_distorted_images(self):
 

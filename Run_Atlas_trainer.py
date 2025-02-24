@@ -549,7 +549,7 @@ def main():
     # -Medical Images
     medical_datadir = 'datasets/dcm/'
     # -Creating our own dataset
-    image_datadir = 'datasets/images/cuphead.jpg'
+    image_datadir = 'datasets/images/guppy.jpg'
     # -Shapes
     shape_folder = 'datasets/shapes/'
     shape_name = 'bird'
@@ -589,7 +589,8 @@ def main():
         datahandler = dh(
             dataset_type='image_transform',
             image_path=image_datadir,
-            samples=200
+            samples=200,
+            shape_seg=True
         )
 
     elif dataset_choice == '4':

@@ -552,7 +552,7 @@ def main():
     image_datadir = 'datasets/images/cuphead.jpg'
     # -Shapes
     shape_folder = 'datasets/shapes/'
-    shape_name = 'apple'
+    shape_name = 'bird'
 
     # offer the user to select the dataset
     lg.custom("Select the dataset you want to use:", "green")

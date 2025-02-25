@@ -181,7 +181,7 @@ class ImageTransformDataset(Dataset):
 
         blurred = cv2.GaussianBlur(image, (5, 5), 0)
 
-        edges = cv2.Canny(blurred, 50, 150)
+        edges = cv2.Canny(blurred, 20, 150)
 
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -207,7 +207,7 @@ class ImageTransformDataset(Dataset):
                 new_size = (self.size, self.size)
             else:
                 width, height = img.size
-                new_size = 2 ** int(np.log2(min(width, height) // 2))
+                new_size = 2 ** int(np.log2(min(width, height) // 4))
                 # print(f"Resizing image to {new_size}x{new_size}")
                 
             img = ImageOps.fit(img, (new_size, new_size), method=0, bleed=0.0, centering=(0.5, 0.5))

@@ -14,10 +14,10 @@ def apply_gaussian_filter(image_path, output_path, kernel_size=3):
     # filtered_image = cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
     
     # Alternative: Apply median filter
-    # filtered_image = cv2.medianBlur(image, kernel_size)
+    filtered_image = cv2.medianBlur(image, kernel_size)
     
     # Alternative: Apply bilateral filter
-    filtered_image = cv2.bilateralFilter(image, kernel_size, 75, 75)
+    # filtered_image = cv2.bilateralFilter(image, kernel_size, 75, 75)
     
     # cv2.imwrite(output_path, filtered_image)
     fig, ax = plt.subplots(1, 2, figsize=(16, 8))
@@ -32,6 +32,6 @@ def apply_gaussian_filter(image_path, output_path, kernel_size=3):
     print(f"Filtered image saved to {output_path}")
 
 if __name__ == "__main__":
-    input_image_path = "./backup/b6/atlas_epoch_28.png"
-    output_image_path = "./backup/b6/final_atlas_filtered.png"
+    input_image_path = "./backup/b10/atlas_epoch_23.png"
+    output_image_path = "./backup/b10/final_atlas_filtered.png"
     apply_gaussian_filter(input_image_path, output_image_path)

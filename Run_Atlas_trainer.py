@@ -589,7 +589,8 @@ def main():
         datahandler = dh(
             dataset_type='image_transform',
             image_path=image_datadir,
-            samples=200,
+            samples=320,
+            # size=128,
             shape_seg=True
         )
 

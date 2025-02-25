@@ -5,9 +5,37 @@ import matplotlib
 matplotlib.use('TkAgg')  # Forzar un backend interactivo
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import cv2
+
+
+def apply_gaussian_filter(image, kernel_size=3):
+    # Read the image
+
+    image = np.array(image)
+    
+    # Apply Gaussian filter
+    # filtered_image = cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+    
+    # Alternative: Apply median filter
+    filtered_image = cv2.medianBlur(image, kernel_size)
+    
+    # Alternative: Apply bilateral filter
+    # filtered_image = cv2.bilateralFilter(image, kernel_size, 75, 75)
+    
+    # cv2.imwrite(output_path, filtered_image)
+    # fig, ax = plt.subplots(1, 2, figsize=(16, 8))
+    # ax[0].imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    # ax[0].set_title("Original Image")
+    # ax[0].axis("off")
+    # ax[1].imshow(cv2.cvtColor(filtered_image, cv2.COLOR_BGR2RGB))
+    # ax[1].set_title("Filtered Image")
+    # ax[1].axis("off")
+    # plt.show()
+    filtered_image = Image.fromarray(filtered_image)
+    return filtered_image
 
 # Paths
-atlas_snapshots_path = './atlas_snapshots/'
+atlas_snapshots_path = './backup/b10/'
 original_image_path = './datasets/images/chloe.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale
@@ -29,6 +57,10 @@ if not atlas_images:
     raise ValueError("No se encontraron imágenes en atlas_snapshots_path.")
 
 # Convert images to arrays (assuming all have the same size)
+
+for i in range(len(atlas_images)):
+    atlas_images[i] = apply_gaussian_filter(atlas_images[i], kernel_size=3)
+
 frames = [np.array(img) for img in atlas_images]
 
 # Load original image, convert to grayscale

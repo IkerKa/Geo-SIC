@@ -6,26 +6,17 @@ import json
 from PIL import Image
 import matplotlib.pyplot as plt     # type: ignore
 
-path = "nirep/nifti/"
-def load_images(path):
-    images = []
-    for i in range(1, 17):
-        filename = os.path.join(path, f"na{i:02d}.nii.gz")
-        if os.path.exists(filename):
-            img = nib.load(filename)
-            images.append(img)
-        else:
-            print(f"File {filename} does not exist.")
-    return images
+path = "./atlas_snapshots/atlas_epoch_1.nii.gz"
 
-images = load_images(path)
+#load the image from the path
+image = nib.load(path)
+image_data = image.get_fdata()
+image_data = np.array(image_data)
+print(image_data.shape)
 
-random_image = np.random.randint(0, len(images))
-data = images[random_image].get_fdata()
-print(f"Image shape: {data.shape}")
-
-#middle slice
-middle = data.shape[2] // 2
-plt.imshow(data[:, :, middle], cmap="gray")
-plt.axis("off")
+#convert the image to a PIL image
+image_data = np.array(image_data)
+image_data = image_data.astype(np.uint8)
+image_data = Image.fromarray(image_data)
+plt.imshow(image_data)
 plt.show()

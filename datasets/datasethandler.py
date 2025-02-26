@@ -331,26 +331,26 @@ class NiftiDataset(Dataset):
         return len(self.images)
     
     # DESCOMENTAR SI TENEMOS FUNCION PARA LEER .NII (TODO)
-    def __getitem__(self, idx):
-        # Obtener la imagen (ya sea como array o a partir de la imagen cargada)
-        image_data = self.images[idx]
-        if isinstance(image_data, nib.Nifti1Image):
-            image_data = image_data.get_fdata()
+    # def __getitem__(self, idx):
+    #     # Obtener la imagen (ya sea como array o a partir de la imagen cargada)
+    #     image_data = self.images[idx]
+    #     if isinstance(image_data, nib.Nifti1Image):
+    #         image_data = image_data.get_fdata()
         
-        # Take or calculate the slice index
-        z_idx = self.slice_index if self.slice_index is not None else image_data.shape[2] // 2
-        image_slice = image_data[:, :, z_idx]
+    #     # Take or calculate the slice index
+    #     z_idx = self.slice_index if self.slice_index is not None else image_data.shape[2] // 2
+    #     image_slice = image_data[:, :, z_idx]
 
-        # Resize the image if needed
-        if self.size is not None:
-            image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+    #     # Resize the image if needed
+    #     if self.size is not None:
+    #         image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
 
-        # Convertir la imagen a tensor: [C, H, W] y normalizar a [0,1]
+    #     # Convertir la imagen a tensor: [C, H, W] y normalizar a [0,1]
         
-        image_tensor = torch.from_numpy(image_slice).unsqueeze(0)
-        if self.transform:
-            image_tensor = self.transform(image_tensor)
-        return image_tensor
+    #     image_tensor = torch.from_numpy(image_slice).unsqueeze(0)
+    #     if self.transform:
+    #         image_tensor = self.transform(image_tensor)
+    #     return image_tensor
 
     #Esto sigue el metodo tradicional de cargar la imagen (convertir a 2D con png)
     # def __getitem__(self, idx):
@@ -380,6 +380,30 @@ class NiftiDataset(Dataset):
     #         image_tensor = self.transform(image_tensor)
     #     return image_tensor
     
+    #COMBINANDO AMBOS METODOS
+    def __getitem__(self, idx):
+        image_data = self.images[idx]
+        if isinstance(image_data, nib.Nifti1Image):
+            image_data = image_data.get_fdata()
+
+        # Obtener el slice
+        z_idx = self.slice_index if self.slice_index is not None else image_data.shape[2] // 2
+        image_slice = image_data[:, :, z_idx]
+
+        # Redimensionar si es necesario
+        if self.size is not None:
+            image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+
+        # Normalizar sin perder precisión
+        image_slice = (image_slice - np.min(image_slice)) / (np.max(image_slice) - np.min(image_slice) + 1e-8)
+
+        # Convertir a tensor
+        image_tensor = torch.from_numpy(image_slice).unsqueeze(0).float()
+
+        if self.transform:
+            image_tensor = self.transform(image_tensor)
+
+        return image_tensor
 
 class DataHandler:
     def __init__(self, dataset_type, **kwargs):

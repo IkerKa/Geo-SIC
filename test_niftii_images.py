@@ -38,14 +38,26 @@ def calculate_metrics(image1, image2):
 
 
 def plot_images(images):
-    """Muestra las imágenes cargadas."""
-    for i, img in enumerate(images):
-        plt.figure()
-        plt.imshow(img, cmap='gray')
-        plt.title(f'Image {i+1}')
-        plt.colorbar()
-        plt.show()
+    """Muestra un collage de dos imágenes y sincroniza el zoom."""
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    img1 = ax1.imshow(images[0], cmap='gray')
+    img2 = ax2.imshow(images[-1], cmap='gray')
 
+    ax1.set_title('Imagen 0')
+    ax2.set_title('Imagen i')
+
+    # Sincronizar el zoom
+    def on_zoom(event):
+        if event.inaxes == ax1:
+            ax2.set_xlim(ax1.get_xlim())
+            ax2.set_ylim(ax1.get_ylim())
+        elif event.inaxes == ax2:
+            ax1.set_xlim(ax2.get_xlim())
+            ax1.set_ylim(ax2.get_ylim())
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect('motion_notify_event', on_zoom)
+    plt.show()
 
 def plot_differences(I1, I2):
     """Muestra el mapa de diferencias absoluto y un heatmap."""

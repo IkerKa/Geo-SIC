@@ -207,7 +207,6 @@ def load_and_preprocess_data2D(data_dir, json_file, keyword):
 
 
 def save_atlas(atlas, filename):
-    
     atlas_np = atlas.squeeze().detach().cpu().numpy() 
     print("Atlas shape:", atlas_np.shape) 
     atlas_image = sitk.GetImageFromArray(atlas_np)

@@ -10,7 +10,8 @@ from scipy.stats import pearsonr
 def load_nii_gz_images_from_path(path):
     """Carga todas las imágenes NIfTI de un directorio."""
     images = []
-    for file in os.listdir(path):
+    
+    for file in sorted(os.listdir(path), key=lambda x: int(x.split('_')[-1].split('.')[0])):
         if file.endswith(".nii.gz"):
             img = nib.load(os.path.join(path, file))
             images.append(img.get_fdata())
@@ -38,6 +39,12 @@ def calculate_metrics(image1, image2):
 
 
 def plot_images(images):
+
+    # for i, img in enumerate(images):
+    #     plt.figure()
+    #     plt.imshow(img, cmap='gray')
+    #     plt.title(f'Imagen {i}')
+    #     plt.show()
     """Muestra un collage de dos imágenes y sincroniza el zoom."""
     fig, (ax1, ax2) = plt.subplots(1, 2)
     img1 = ax1.imshow(images[0], cmap='gray')
@@ -62,9 +69,17 @@ def plot_images(images):
 def plot_differences(I1, I2):
     """Muestra el mapa de diferencias absoluto y un heatmap."""
     diff = np.abs(I1 - I2)
+    sign_diff  = (I1 - I2) / (np.max(np.abs(I1 - I2)) + 1e-8)
+
     
     # Normalizar entre 0 y 1
     diff_norm = diff / np.max(diff) if np.max(diff) != 0 else diff
+    
+    plt.figure()
+    plt.imshow(sign_diff, cmap='seismic', vmin=-1, vmax=1)
+    plt.title('Diferencias con Signo')
+    plt.colorbar()
+    plt.show()
 
     # Mapa de diferencias en escala de grises
     plt.figure()

@@ -355,11 +355,11 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             reg_save = torch.zeros(b, w, h, 2).to(dev)
 
             # Now we wont pretrain the atlas building network --> USE THE PRETRAIN
-            # if epoch <= para.model.pretrain_epoch:
-            #     perm_indices = torch.randperm(b)
-            #     atlas_bch = tb[perm_indices]
-            # else:
-            atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
+            if epoch <= para.model.pretrain_epoch:
+                perm_indices = torch.randperm(b)
+                atlas_bch = tb[perm_indices]
+            else:
+                atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
 
             atlas_bch = atlas_bch.to(dev).float()
             tb_img = tb.to(dev).float()

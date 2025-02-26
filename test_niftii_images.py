@@ -6,7 +6,7 @@ import json
 from PIL import Image
 import matplotlib.pyplot as plt     # type: ignore
 
-path = "./atlas_snapshots/atlas_epoch_1.nii.gz"
+path = "./backup/b11/atlas_epoch_1.nii.gz"
 
 #load the image from the path
 image = nib.load(path)

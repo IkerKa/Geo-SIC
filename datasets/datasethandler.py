@@ -394,7 +394,7 @@ class NiftiDataset(Dataset):
         if self.size is not None:
             image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
 
-        # Normalizar sin perder precisión
+        # Normalizar sin perder precisión -> lo hago porque laS nifti pueden tener bastantes valores
         image_slice = (image_slice - np.min(image_slice)) / (np.max(image_slice) - np.min(image_slice) + 1e-8)
 
         # Convertir a tensor

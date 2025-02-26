@@ -35,7 +35,7 @@ def apply_gaussian_filter(image, kernel_size=3):
     return filtered_image
 
 # Paths
-atlas_snapshots_path = './backup/b10/'
+atlas_snapshots_path = './backup/b11/'
 original_image_path = './datasets/images/chloe.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale
@@ -58,8 +58,8 @@ if not atlas_images:
 
 # Convert images to arrays (assuming all have the same size)
 
-for i in range(len(atlas_images)):
-    atlas_images[i] = apply_gaussian_filter(atlas_images[i], kernel_size=3)
+# for i in range(len(atlas_images)):
+#     atlas_images[i] = apply_gaussian_filter(atlas_images[i], kernel_size=3)
 
 frames = [np.array(img) for img in atlas_images]
 

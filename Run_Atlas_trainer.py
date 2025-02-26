@@ -355,19 +355,23 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             phiinv_bch = torch.zeros(b, w, h, 2).to(dev)
             reg_save = torch.zeros(b, w, h, 2).to(dev)
 
-            # Now we wont pretrain the atlas building network 
-            atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
+            # Now we wont pretrain the atlas building network --> USE THE PRETRAIN
+            if epoch <= para.model.pretrain_epoch:
+                perm_indices = torch.randperm(b)
+                atlas_bch = tb[perm_indices]
+            else:
+                atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
+
             atlas_bch = atlas_bch.to(dev).float()
             tb_img = tb.to(dev).float()
 
             #pass the atlas and the target image to the network
-            y_src, momentum, latent_feat  = net(atlas_bch, tb_img, registration=True) # ? y_src and latent_feat is not used
+            _ , momentum, _  = net(atlas_bch, tb_img, registration=True) # ? y_src and latent_feat is not used
             momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
             
             #MATHS things
             img_size = w    # ASSUMING SQUARE IMAGES
             identity = get_grid2D(img_size, dev).permute([0, 3, 2, 1])
-            # epd = Epdiff(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
             epd = Epdiff2D(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
             # logger.divider("Math part")
 
@@ -396,15 +400,16 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             running_loss = 0.0
 
             #metrics
-            grad_norm, grad_mean, grad_max = compute_atlas_gradient_metrics(atlas)
-            logger.info(message=f"--Atlas gradient, max: {grad_max}, min: {grad_mean}")
-            logger.info(message=f"--Atlas gradient norm: {grad_norm}")
+            if epoch > para.model.pretrain_epoch:
+                grad_norm, grad_mean, grad_max = compute_atlas_gradient_metrics(atlas)
+                logger.info(message=f"--Atlas gradient, max: {grad_max}, min: {grad_mean}")
+                logger.info(message=f"--Atlas gradient norm: {grad_norm}")
 
 
 
-        #if epoch >= para.model.pretrain_epoch:
-        opt.step()
-        opt.zero_grad() 
+        if epoch >= para.model.pretrain_epoch: #Dejarlo si se usa el pretrained anteriormente
+            opt.step()
+            opt.zero_grad() 
         
         end = time.time()
         times.append(end - init)
@@ -553,6 +558,8 @@ def main():
     # -Shapes
     shape_folder = 'datasets/shapes/'
     shape_name = 'bird'
+    # -Nifti
+    nifti_datadir = 'nirep/nifti/'
 
     # offer the user to select the dataset
     lg.custom("Select the dataset you want to use:", "green")
@@ -560,9 +567,10 @@ def main():
     lg.custom("2. Medical Images", "green")
     lg.custom("3. Custom Images", "yellow")
     lg.custom("4. Shapes", "purple")
+    lg.custom("5. Nifti", "orange")
     lg.divider()
     dataset_choice = input("Enter the number of the dataset you want to use: ").strip()
-    if dataset_choice != '1' and dataset_choice != '2' and dataset_choice != '3' and dataset_choice != '4':
+    if dataset_choice != '1' and dataset_choice != '2' and dataset_choice != '3' and dataset_choice != '4' and dataset_choice != '5':
         lg.custom("Invalid choice. Exiting...", "red")
         exit()
     lg.custom(f"Dataset choice: {dataset_choice}", "red")
@@ -602,6 +610,14 @@ def main():
             object_name=shape_name,
             size=128,
             nAugment=0
+        )
+
+    elif dataset_choice == '5':
+        # Nifti
+        datahandler = dh(
+            dataset_type='nifti',
+            directory=nifti_datadir,
+            size=256
         )
 
 

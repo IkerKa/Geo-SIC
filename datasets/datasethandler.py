@@ -14,6 +14,8 @@ import cv2
 from scipy.ndimage import gaussian_filter, map_coordinates          #type: ignore
 from PIL import ImageOps
 import random
+import nibabel as nib                                                #type: ignore
+import scipy.ndimage
 #------------
 
 #--Shared functions--
@@ -40,7 +42,17 @@ def elastic_deformation(image, alpha_range=(20, 55), sigma_range=(2, 8)):
             deformed = map_coordinates(image_np, indices, order=1, mode='reflect').reshape(shape)
         # Convertir de nuevo a imagen PIL
         return Image.fromarray(deformed.astype(np.uint8))
-    
+def load_images(path, files):
+    images = []
+    for filename in files:
+        full_path = os.path.join(path, filename)
+        if os.path.exists(full_path):
+            img = nib.load(full_path)
+            images.append(img)
+        else:
+            print(f"The file {full_path} does not exist.")
+    return images
+
 #------------------------------------------------------------   
 
 #--Parameters: ndjson_file, samples=100, resize=None, transform=None
@@ -291,6 +303,83 @@ class ShapeDataset(Dataset):
             image_tensor = self.transform(image_tensor)
         return image_tensor
 
+class NiftiDataset(Dataset):
+    """
+    Dataset to load 3D NIfTI images and convert them to 2D tensors.
+    """
+    def __init__(self, directory, size=None, transform=None, slice_index=None):
+        """
+        Args:
+            directory (str): Path to the directory containing the NIfTI files.
+            size (int or None): Desired size for the output image (assuming square images, e.g., 128 for 128x128).
+            transform (callable, optional): Additional transformation to apply on the tensor.
+            slice_index (int or None): Index of the slice to extract from the 3D volume.
+        """
+        self.size = size
+        self.transform = transform
+        self.slice_index = slice_index
+
+        # Obtener los archivos (se asume que no son segmentaciones)
+        all_files = [f for f in os.listdir(directory) if f.endswith('.nii.gz') 
+                     and not f.endswith('_seg.nii.gz') and f.startswith('na')]
+        self.files = sorted(all_files)
+
+        # Cargar las imágenes NIfTI
+        self.images = [nib.load(os.path.join(directory, f)) for f in self.files]
+
+    def __len__(self):
+        return len(self.images)
+    
+    # DESCOMENTAR SI TENEMOS FUNCION PARA LEER .NII (TODO)
+    # def __getitem__(self, idx):
+    # # Obtener la imagen (ya sea como array o a partir de la imagen cargada)
+    # image_data = self.images[idx]
+    # if isinstance(image_data, nib.Nifti1Image):
+    #     image_data = image_data.get_fdata()
+    
+    # # Take or calculate the slice index
+    # z_idx = self.slice_index if self.slice_index is not None else image_data.shape[2] // 2
+    # image_slice = image_data[:, :, z_idx]
+
+    # # Resize the image if needed
+    # if self.size is not None:
+    #     image_slice = cv2.resize(image_slice, (self.size[1], self.size[0]), interpolation=cv2.INTER_LINEAR)
+
+    # # Convertir la imagen a tensor: [C, H, W] y normalizar a [0,1]
+    
+    # image_tensor = torch.from_numpy(image_slice).unsqueeze(0)
+    # if self.transform:
+    #     image_tensor = self.transform(image_tensor)
+    # return image_tensor
+
+    #Esto sigue el metodo tradicional de cargar la imagen (convertir a 2D con png)
+    def __getitem__(self, idx):
+        # Cargar la imagen NIfTI y obtener el array de datos
+        img = self.images[idx]
+        data = img.get_fdata()
+
+        z_idx = self.slice_index if self.slice_index is not None else data.shape[2] // 2
+        slice_img = data[:, :, z_idx]
+
+        slice_norm = (slice_img - np.min(slice_img)) / (np.max(slice_img) - np.min(slice_img) + 1e-8)
+        slice_uint8 = (slice_norm * 255).astype(np.uint8)
+
+        pil_img = Image.fromarray(slice_uint8)
+        pil_img = ImageOps.grayscale(pil_img)
+
+        if self.size is not None:
+            pil_img = pil_img.resize((self.size, self.size))
+
+        #[0,1]
+        image_np = np.array(pil_img, dtype=np.float32) / 255.0
+
+        #[C, H, W]
+        image_tensor = torch.from_numpy(image_np).unsqueeze(0)
+
+        if self.transform:
+            image_tensor = self.transform(image_tensor)
+        return image_tensor
+    
 
 class DataHandler:
     def __init__(self, dataset_type, **kwargs):
@@ -310,6 +399,8 @@ class DataHandler:
             return ImageTransformDataset(**kwargs)
         elif dataset_type == 'shape':
             return ShapeDataset(**kwargs)
+        elif dataset_type == 'nifti':
+            return NiftiDataset(**kwargs)
         else:
             raise ValueError(f"Dataloader type '{dataset_type}' not recognized.")
     

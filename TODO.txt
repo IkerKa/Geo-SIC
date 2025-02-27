@@ -1,0 +1,11 @@
+
+
+--Fichero para todos los experimentos pendientes por probar--
+
+(Creado despues de la prueba con 500 epocas)
+
+- Que pasa si bajo mas el batch size? eso conlleva a tener mas batches / epoca, mejoraria la nitidez del resultado? probar con N epocas y batch_size = 4.
+- Proporcion de preentrenamiento/optimizacion, cual es la ideal? parece que depende tambien del tamaño del dataset, igual para 16 cerebros podemos probar
+con un preentreno de 1/5 * N respecto a N epocas. 
+- Volver a probar con muchas epocas pero con batches mas bajos
+- Buscar mas imagenes para el dataset.

@@ -51,7 +51,7 @@ def plot_images(images):
     img2 = ax2.imshow(images[-1], cmap='gray')
 
     ax1.set_title('Imagen 0')
-    ax2.set_title('Imagen i')
+    ax2.set_title('Imagen Final')
 
     # Sincronizar el zoom
     def on_zoom(event):

@@ -25,3 +25,9 @@ Pero aun así sigo necesitando mas imagenes de dataset.
 -preguntar que igual estan mal alineados los cerebros en los nii.gz
     -probar a alinearlos yo y verificando que los slice del medio sean iguales si de verdad los cerebros son sanos todos <-- ESTOOO
     -o esperar a que me digan
+
+-otra prueba con 16 cerebros pero deformados y verificar lo que comento de la loss porque ahi el dataset si que será diferente.
+
+-Me he dado cuenta que igual con pocas imagenes pues hace rapido lo de recuperar como el average peero no sale tan nitido como si usase mas, no se, es curioso
+(ver prueba de isaac con 50 epocas y 16 imagenes con batch size 8) --> Es correcto, ha recuperado super rapido y con muy pocas, tiene sentido porque hay menos imagenes
+pero es que estaban deformadas.

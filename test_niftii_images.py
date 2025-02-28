@@ -47,8 +47,11 @@ def plot_images(images):
     #     plt.show()
     """Muestra un collage de dos imágenes y sincroniza el zoom."""
     fig, (ax1, ax2) = plt.subplots(1, 2)
-    img1 = ax1.imshow(images[0], cmap='gray')
-    img2 = ax2.imshow(images[-1], cmap='gray')
+
+    img_1 = np.rot90(images[0], -1)
+    img_2 = np.rot90(images[-1], -1)
+    img1 = ax1.imshow(img_1, cmap='gray')
+    img2 = ax2.imshow(img_2, cmap='gray')
 
     ax1.set_title('Imagen 0')
     ax2.set_title('Imagen Final')
@@ -74,6 +77,10 @@ def plot_differences(I1, I2):
     
     # Normalizar entre 0 y 1
     diff_norm = diff / np.max(diff) if np.max(diff) != 0 else diff
+
+    #rotate 90 clockwise
+    sign_diff = np.rot90(sign_diff, -1)
+    diff_norm = np.rot90(diff_norm, -1)
     
     plt.figure()
     plt.imshow(sign_diff, cmap='seismic', vmin=-1, vmax=1)

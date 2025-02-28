@@ -1,6 +1,7 @@
 import nibabel as nib
 import numpy as np
 import os
+import matplotlib.pyplot as plt
 
 def check_affine_alignment(file_paths):
     """Check if all NIfTI volumes have the same affine transformation."""
@@ -38,6 +39,10 @@ def extract_middle_slice(file_path):
     data = img.get_fdata()
     middle_slice_index = data.shape[2] // 2
     middle_slice = data[:, :, middle_slice_index]
+
+    plt.imshow(middle_slice, cmap='gray')
+    plt.axis('off')
+    plt.show()
 
     voxel_spacing = img.header.get_zooms()
     

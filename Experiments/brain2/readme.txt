@@ -15,3 +15,5 @@ tanta informacion para que salga tan nitido como en el paper.
 
 
 PENDIENTE: Tengo la loss y el tiempo en whatsapp, ponerlo en esta carpeta!
+
+INTERP: LINEAR

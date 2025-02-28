@@ -15,3 +15,13 @@ con un preentreno de 1/5 * N respecto a N epocas.
 
 - Conclusion: Parece que bueno, tiene sentido que pase pero al probar a inicializar con otro atlas se alcanza el mismo resultado, eso es bueno.
 Pero aun así sigo necesitando mas imagenes de dataset.
+
+-TODO: Buscar otras configuraciones, no solo cambiar el atlas, de verdad eso cambiaría? comentarlo en el documento.
+
+-Muchas cosas que comentar en el correo/documento.
+
+-Reduced dim? queee??
+
+-preguntar que igual estan mal alineados los cerebros en los nii.gz
+    -probar a alinearlos yo y verificando que los slice del medio sean iguales si de verdad los cerebros son sanos todos <-- ESTOOO
+    -o esperar a que me digan

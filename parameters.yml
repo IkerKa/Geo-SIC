@@ -8,15 +8,15 @@ model:
     kernel_K: False
     pure_atlas_bulding: True
     reduced_dim: 16
-    pretrain_epoch: 20
+    pretrain_epoch: 45
 
 solver:
-    lr: 0.005
-    atlas_lr: 0.01
+    lr: 0.001
+    atlas_lr: 0.05
     epochs: 200
-    batch_size: 50
+    batch_size: 4
     weight_decay: 0.0001
-    pre_train: 20
+    pre_train: 45
     Euler_steps: 12
     Alpha: 5
     Gamma: 0.5

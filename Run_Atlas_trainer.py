@@ -327,6 +327,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
 
     logger.banner("Training started")
     
+    total_init = time.time()
     for epoch in range(para.solver.epochs):
         init = time.time()
         #save the current atlas in atlas_snapshots (and the raw file)
@@ -412,6 +413,8 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         
         end = time.time()
         times.append(end - init)
+
+    final_time = time.time() - total_init
     
     logger.success(message="Training finished")
     save_atlas_2D(atlas, f'atlas_snapshots/atlas_epoch_{para.solver.epochs}.png')
@@ -420,6 +423,9 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
     #plot the loss per epoch
     visualize_loss(loss_per_epoch)
     visualize_time(times)
+
+    logger.info(message=f"Total training time: {final_time}")
+    logger.info(message=f"Total training loss: {total}")
 
     return atlas
     

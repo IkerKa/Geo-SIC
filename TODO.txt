@@ -33,4 +33,20 @@ Pero aun así sigo necesitando mas imagenes de dataset.
 pero es que estaban deformadas.
 
 -Igual si que ha mejorado el poner el pre-entreno porque converge bastante rapido, igual con un minimo de pretrain le es suficiente
-(hacer la misma prueba del isaac pero quitando lo de prtrain a ver que tal)
+(hacer la misma prueba del isaac pero quitando lo de prtrain a ver que tal): Ha hecho lo mismo yo creo que es dependiendo de como sea el dataset tambien
+
+Entonces lo que yo creo es:
+- La importancia del dataset es muy importante ya que dependiendo de como de diferentes sean las imagenes tardara mas en converger
+- Por ejemplo con los cerebros como no hay transformaciones y son uy similares entre si alomejor no se necesitan tantas epocas como se ha podido llegar a ver
+- Tengo que probar la interpolacion con nearest con los cerebros
+- He resuelto el misterio de los artefactos
+- La proporcion ideal de pretrain? grid_search? no lo se.
+
+- He hecho la misma prueba de 50 epocas con 10 pretrain y sin pretrain, me gustaria evaluar los resultados (b19/b20) y ver en que se diferencian, la precision?
+el tiempo? no lo se, el problema es que al crearse el dataset aleatoriamente con una transformacion y no habermelo guardado no es que sea una prueba muy robusta
+para verificar si el pretrain hace algo, pero si veo que hay diferencias puedo intentar guardarmelo o directamente, hacerlo con los cerebros, eso si que me parece 
+mejor prueba.
+
+Siguiente prueba: con cerebros mismo dataset para verificar
+
+

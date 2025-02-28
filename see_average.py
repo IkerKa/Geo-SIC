@@ -4,6 +4,8 @@ import glob
 
 import matplotlib.pyplot as plt
 
+# It only works if i have the whole dataset!
+
 # Path to the directory containing the .nii.gz files
 data_path = './nirep/nifti/na*.nii.gz'
 # Load all .nii.gz files only that starts wit na_{number}.ni.gz

@@ -15,3 +15,5 @@ busca un cerebro a partir de una deformacion.
 
 Resumen: Partimos de cerebros sin deformar, de pocos, entonces el resultado es un average de un cerebro, cada atlas en cada epoca es un cerebro entonces
 la loss es practicamente siempre cercana a 0, cuando cambiaria? con mas imagenes? con enfermos?
+
+INTERP: LINEAR

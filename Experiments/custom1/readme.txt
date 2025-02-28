@@ -14,3 +14,5 @@ el atlas de esta imagen se ve mas nítido y puede ser porque al ser una imagen c
 
 
 Pendiente: ver si las imagens de cerebros estan correctamente alineadas + alguna que otra prueba mas (corta)
+
+INTERP: LINEAR

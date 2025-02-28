@@ -392,7 +392,8 @@ class NiftiDataset(Dataset):
 
         # Redimensionar si es necesario
         if self.size is not None:
-            image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+            # image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
+            image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
 
         # Normalizar sin perder precisión -> lo hago porque laS nifti pueden tener bastantes valores
         image_slice = (image_slice - np.min(image_slice)) / (np.max(image_slice) - np.min(image_slice) + 1e-8)

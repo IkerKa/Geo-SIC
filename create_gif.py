@@ -35,7 +35,7 @@ def apply_gaussian_filter(image, kernel_size=3):
     return filtered_image
 
 # Paths
-atlas_snapshots_path = './backup/b18/'
+atlas_snapshots_path = './backup/b19/'
 original_image_path = './datasets/images/chloe.jpg'
 
 # Load atlas images (assuming they are PNG) and convert to grayscale

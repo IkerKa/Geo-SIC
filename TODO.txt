@@ -31,3 +31,6 @@ Pero aun así sigo necesitando mas imagenes de dataset.
 -Me he dado cuenta que igual con pocas imagenes pues hace rapido lo de recuperar como el average peero no sale tan nitido como si usase mas, no se, es curioso
 (ver prueba de isaac con 50 epocas y 16 imagenes con batch size 8) --> Es correcto, ha recuperado super rapido y con muy pocas, tiene sentido porque hay menos imagenes
 pero es que estaban deformadas.
+
+-Igual si que ha mejorado el poner el pre-entreno porque converge bastante rapido, igual con un minimo de pretrain le es suficiente
+(hacer la misma prueba del isaac pero quitando lo de prtrain a ver que tal)

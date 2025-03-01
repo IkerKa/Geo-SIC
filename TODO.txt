@@ -12,7 +12,7 @@ con un preentreno de 1/5 * N respecto a N epocas.
 
 
 - Otra conclusion que saco puede ser que si que sea necesario tener un pre-entreno.
-
+    
 - Conclusion: Parece que bueno, tiene sentido que pase pero al probar a inicializar con otro atlas se alcanza el mismo resultado, eso es bueno.
 Pero aun así sigo necesitando mas imagenes de dataset.
 

@@ -223,13 +223,13 @@ if __name__ == "__main__":
         plt.show()
 
         # Metric evolution
-        # evaluate_evolution(images)
+        evaluate_evolution(images)
 
-        # # Atlas stability
-        # evaluate_stability(images)
+        # Atlas stability
+        evaluate_stability(images)
 
-        # # Variability map
-        # calculate_variability(images)
+        # Variability map
+        calculate_variability(images)
 
         # Frequency spectrum
         plot_frequency_spectrum(I1, I2)

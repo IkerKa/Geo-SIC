@@ -431,3 +431,7 @@ class DataHandler:
     
     def get_dataset(self):
         return self.dataset
+    
+    def get_image(self, idx):
+        return self.dataset[idx]
+    

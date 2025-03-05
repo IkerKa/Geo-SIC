@@ -50,3 +50,5 @@ mejor prueba.
 Siguiente prueba: con cerebros mismo dataset para verificar
 
 
+--FIN TODO previo a reunion 4/3/2025--
+

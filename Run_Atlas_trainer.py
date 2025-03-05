@@ -361,7 +361,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
                 atlas_bch = tb[perm_indices]
             else:
                 atlas_bch = torch.cat(b*[atlas]).reshape(b, c, w, h)
-
+            
             atlas_bch = atlas_bch.to(dev).float()
             tb_img = tb.to(dev).float()
 
@@ -399,6 +399,9 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             total += running_loss
             running_loss = 0.0
 
+      
+
+
             #metrics
             if epoch > para.model.pretrain_epoch:
                 grad_norm, grad_mean, grad_max = compute_atlas_gradient_metrics(atlas)
@@ -406,6 +409,16 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
                 logger.info(message=f"--Atlas gradient norm: {grad_norm}")
 
 
+
+        #If the pre-train is over, freeze the net and stop the process
+        if epoch == para.model.pretrain_epoch:
+            for param in net.parameters():
+                param.requires_grad = False
+
+            #save the current state of the network
+            torch.save(net.state_dict(), f'pretrained_networks/net_epochs_{para.model.pretrain_epoch}.pth')
+            logger.info("Pretraining finished")
+            sys.exit()
 
         if epoch >= para.model.pretrain_epoch: #Dejarlo si se usa el pretrained anteriormente
             opt.step()

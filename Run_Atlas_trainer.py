@@ -414,8 +414,6 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
         if epoch == para.model.pretrain_epoch:
             for param in net.parameters():
                 param.requires_grad = False
-
-            #save the current state of the network
             torch.save(net.state_dict(), f'pretrained_networks/net_epochs_{para.model.pretrain_epoch}.pth')
             logger.info("Pretraining finished")
             sys.exit()

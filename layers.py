@@ -27,7 +27,7 @@ class SpatialTransformer(nn.Module):
         # see: https://discuss.pytorch.org/t/how-to-register-buffer-without-polluting-state-dict
         self.register_buffer('grid', grid)
 
-    def forward(self, src, flow):
+    def forward(self, src, flow, return_phi=False):
         # new locations
         new_locs = self.grid + flow
         shape = flow.shape[2:]
@@ -45,8 +45,11 @@ class SpatialTransformer(nn.Module):
             new_locs = new_locs.permute(0, 2, 3, 4, 1)
             new_locs = new_locs[..., [2, 1, 0]]
 
-        return nnf.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
-
+        if return_phi:
+            return nnf.grid_sample(src, new_locs, align_corners=True, mode=self.mode), new_locs
+        else:
+            return nnf.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
+        
 
 class VecInt(nn.Module):
     """

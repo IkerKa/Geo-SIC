@@ -259,7 +259,7 @@ def initialize_network_optimizer2D(xDim, yDim, para, dev):
 
     return net, criterion, optimizer
 
-def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, xDim, yDim, dev, logger):
+def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, DistType, RegularityType, weight_dist, weight_reg,  reduced_xDim, reduced_yDim, xDim, yDim, dev, shooting_flag, phi_flag, logger):
     """
     Train the network.
 
@@ -366,30 +366,46 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
             tb_img = tb.to(dev).float()
 
             #pass the atlas and the target image to the network
-            _ , momentum, _  = net(atlas_bch, tb_img, registration=True) # ? y_src and latent_feat is not used
-            momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
+            if phi_flag:
+                y_src , momentum, _, _ = net(atlas_bch, tb_img, registration=True, shooting=shooting_flag, return_phi = True) # ? y_src and latent_feat is not used
+            else:
+                y_src , momentum, _ = net(atlas_bch, tb_img, registration=True, shooting=shooting_flag)
             
-            #MATHS things
-            img_size = w    # ASSUMING SQUARE IMAGES
-            identity = get_grid2D(img_size, dev).permute([0, 3, 2, 1])
-            epd = Epdiff2D(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
-            # logger.divider("Math part")
+            #depending on the shooting flag, we will keep static the velocity field or not
 
-            for b_id in range(b):   #adapted to 2D images
-                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, 2))
-                velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h, 2)  
-                reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
-                num_steps = para.solver.Euler_steps
-                v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)    # ! Bottleneck for complexity
-                phiinv = displacement.unsqueeze(0) + identity
-                phiinv_bch[b_id,...] = phiinv 
-                reg_save[b_id,...] = reg_temp
+            if shooting_flag == 'SVF':
+                Dist = NCC().loss(y_src, tb_img)
+                Reg = Grad(penalty=RegularityType)  
+                Reg_loss = Reg.loss2D(momentum)
 
-            dfm = Torchinterp2D(atlas_bch,phiinv_bch)
-            Dist = criterion(dfm, tb_img)
-            Reg_loss =  reg_save.sum()
-            loss_total =  Dist + weight_reg * Reg_loss
-            loss_total.backward(retain_graph=True)
+                if epoch <= para.model.pretrain_epoch:
+                    loss_total = weight_dist * Dist + weight_reg * Reg_loss
+                else:
+                    pass # !!! fill this, atm we are not using this condition
+            else:   
+                momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
+
+                #MATHS things
+                img_size = w    # ASSUMING SQUARE IMAGES
+                identity = get_grid2D(img_size, dev).permute([0, 3, 2, 1])
+                epd = Epdiff2D(dev, (reduced_xDim, reduced_yDim), (xDim, yDim), para.solver.Alpha, para.solver.Gamma, para.solver.Lpow)
+                # logger.divider("Math part")
+
+                for b_id in range(b):   #adapted to 2D images
+                    v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(w, h, 2))
+                    velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(w, h, 2)  
+                    reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
+                    num_steps = para.solver.Euler_steps
+                    v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)    # ! Bottleneck for complexity
+                    phiinv = displacement.unsqueeze(0) + identity
+                    phiinv_bch[b_id,...] = phiinv 
+                    reg_save[b_id,...] = reg_temp
+
+                dfm = Torchinterp2D(atlas_bch,phiinv_bch)
+                Dist = criterion(dfm, tb_img)
+                Reg_loss =  reg_save.sum()
+                loss_total =  Dist + weight_reg * Reg_loss
+                loss_total.backward(retain_graph=True)
             
             #Update the network parameters
             optimizer.step()
@@ -411,7 +427,7 @@ def train_network2D(trainloader, aveloader, net, para, criterion, optimizer, Dis
 
 
         #If the pre-train is over, freeze the net and stop the process
-        if epoch == para.model.pretrain_epoch:
+        if epoch == para.model.pretrain_epoch and para.model.pretrain_epoch > 0:       #If we want to pretrain the network we save the model and stop the process
             for param in net.parameters():
                 param.requires_grad = False
             torch.save(net.state_dict(), f'pretrained_networks/net_epochs_{para.model.pretrain_epoch}.pth')
@@ -564,6 +580,9 @@ def main():
     dev = get_device()
     para = read_yaml('./parameters.yml')
 
+    phi_flag = False
+    shooting_flag = None
+
     # Prepare the arguments for the different datasets:
     # -Google Drawings
     google_datadir = 'datasets/jsons/circle.ndjson'
@@ -633,7 +652,9 @@ def main():
         datahandler = dh(
             dataset_type='nifti',
             directory=nifti_datadir,
-            size=256
+            size=128,
+            slice_index=149
+            
         )
 
 
@@ -657,7 +678,8 @@ def main():
     # Initialize the network and optimizer
     net, criterion, optimizer = initialize_network_optimizer2D(xDim, yDim, para, dev)
 
-    atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev, lg)
+
+    atlas = train_network2D(trainloader, aveloader, net, para, criterion, optimizer, NCC, 'l2', 10, 0.001, 16,16, xDim, yDim, dev, shooting_flag, phi_flag, lg)
 
         
     

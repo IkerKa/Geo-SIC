@@ -305,7 +305,7 @@ class UnetDense(LoadableModel):
         # configure transformer
         self.transformer = SpatialTransformer(inshape)
 
-    def forward(self, source, target, registration=False, shooting = None):
+    def forward(self, source, target, registration=False, shooting = None, return_phi=False):
         '''
         Parameters:
             source: Source image tensor.
@@ -334,9 +334,9 @@ class UnetDense(LoadableModel):
 
         # integrate to produce diffeomorphic warp j
 
-        # !!! SE ESTA LLAMANDO SVF? DE VERDAD? Comprobarlo!
+        
         if (shooting == "SVF"):
-            print("Shooting!!")
+            # print("Shooting!!")
             if self.integrate:
                 pos_flow = self.integrate(pos_flow)
                 neg_flow = self.integrate(neg_flow) if self.bidir else None
@@ -350,13 +350,24 @@ class UnetDense(LoadableModel):
             neg_flow = self.fullsize(neg_flow) if self.bidir else None
         # warp image with flow field
 
-        y_source = self.transformer(source, pos_flow)
+        # if return_phi:
+        #     y_source, new_loc = self.transformer(source, pos_flow, return_phi=return_phi)
+        # else:
+        r_phi = return_phi
+
+        if return_phi:
+            y_source, new_loc = self.transformer(source, pos_flow, return_phi=r_phi)
+        else:
+            y_source = self.transformer(source, pos_flow, return_phi=r_phi)
 
         # return non-integrated flow field if training
         if not registration:
             return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow)
         else:
-            return y_source, pos_flow, latent_f # Deformed image (if svf = true), transformation field, and latent features
+            if return_phi:
+                return y_source, pos_flow, latent_f, new_loc
+            else:
+                return y_source, pos_flow, latent_f # Deformed image (if svf = true), transformation field, and latent features
 
 
 class ConvBlock(nn.Module):

@@ -307,7 +307,7 @@ class NiftiDataset(Dataset):
     """
     Dataset to load 3D NIfTI images and convert them to 2D tensors.
     """
-    def __init__(self, directory, size=None, transform=None, slice_index=None):
+    def __init__(self, directory, size=None, transform=None, slice_index=None, seg=None):
         """
         Args:
             directory (str): Path to the directory containing the NIfTI files.
@@ -318,14 +318,18 @@ class NiftiDataset(Dataset):
         self.size = size
         self.transform = transform
         self.slice_index = slice_index
+        self.seg = seg
 
         # Obtener los archivos (se asume que no son segmentaciones)
         all_files = [f for f in os.listdir(directory) if f.endswith('.nii.gz') 
                      and not f.endswith('_seg.nii.gz') and f.startswith('na')]
+        all_seg_files = [f for f in os.listdir(directory) if f.endswith('_seg.nii.gz')
+                         and f.startswith('na')]
         self.files = sorted(all_files)
 
         # Cargar las imágenes NIfTI
         self.images = [nib.load(os.path.join(directory, f)) for f in self.files]
+        self.seg_images = [nib.load(os.path.join(directory, f)) for f in all_seg_files]
 
     def __len__(self):
         return len(self.images)
@@ -404,7 +408,19 @@ class NiftiDataset(Dataset):
         if self.transform:
             image_tensor = self.transform(image_tensor)
 
-        return image_tensor
+        if self.seg:
+            #return also the corresponding segmentation of the image 
+            seg_data = self.seg_images[idx]
+            if isinstance(seg_data, nib.Nifti1Image):
+                seg_data = seg_data.get_fdata()
+            seg_slice = seg_data[:, :, z_idx]
+            seg_slice = cv2.resize(seg_slice, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
+            seg_slice = (seg_slice - np.min(seg_slice)) / (np.max(seg_slice) - np.min(seg_slice) + 1e-8)
+            seg_tensor = torch.from_numpy(seg_slice).unsqueeze(0).float()
+            return image_tensor, seg_tensor
+        
+        else:
+            return image_tensor
 
 class DataHandler:
     def __init__(self, dataset_type, **kwargs):

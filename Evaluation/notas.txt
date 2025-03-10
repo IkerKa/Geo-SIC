@@ -2,8 +2,8 @@
 
 -TODO de pruebas a realizar:
 
-Pruebas normales con los mismos cerebros y ver como cambian los resultados cambiando el numero de epocas 
-Pruebas con las segmentaciones y sacando el valor DICE (que es lo que dice salvador)
+Pruebas normales con los mismos cerebros y ver como cambian los resultados cambiando el numero de epocas --> DONE (partially)
+Pruebas con las segmentaciones y sacando el valor DICE (que es lo que dice salvador)  ----> DONE
 Pruebas con un cerebro deformado / shapes mas sencillas para evaluar bien el grid (que tengo que entenderlo)
 Pruebas extremas
 Grid search

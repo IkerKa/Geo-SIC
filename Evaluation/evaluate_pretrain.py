@@ -65,7 +65,7 @@ def load_parameters():
     return para, device
 
 # Load Data
-def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=128, tgt_index=5, src_index=7):
+def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index=5, src_index=7):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
@@ -79,6 +79,9 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
     phi_inv = None
     
     print('Pre-training for', num_epochs, 'epochs')
+
+    ssim_per_epoch = []
+    loss_per_epoch = []
     
     for epoch in range(num_epochs):
         net.eval()
@@ -91,9 +94,26 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
         loss_total = dist_loss + reg_loss
         loss_total.backward()
         optimizer.step()
+
+        loss_per_epoch.append(loss_total.item())
+        ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
+                                   data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+        
         
         with torch.no_grad():
             phi_inv = new_locs[0, ...]
+
+    #plot graph
+    fig, ax = plt.subplots(1, 2, figsize=(15, 5))
+    ax[0].plot(loss_per_epoch)
+    ax[0].set_title('Loss')
+    ax[0].set_xlabel('Epoch')
+    ax[0].set_ylabel('Loss')
+    ax[1].plot(ssim_per_epoch)
+    ax[1].set_title('SSIM')
+    ax[1].set_xlabel('Epoch')
+    ax[1].set_ylabel('SSIM')
+    plt.show()
     
     return phi_inv, y_src
 
@@ -171,8 +191,8 @@ def main():
 
 
 
-    target_index = 1
-    source_index = 5
+    target_index = 4
+    source_index = 13
 
     (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
 
@@ -216,10 +236,23 @@ def main():
     axes[2].imshow(overlay, cmap='gray')
     axes[2].set_title('Overlay of Segmentations')
     plt.show()
+
+    fig, ax = plt.subplots()
+    interval = 2
+    for row in range(0, phi_inv.shape[0], interval):
+        ax.plot(phi_inv[row, :, 1].cpu().detach().numpy(), phi_inv[row, :, 0].cpu().detach().numpy(), 'm')
+    for col in range(0, phi_inv.shape[1], interval):
+        ax.plot(phi_inv[:, col, 1].cpu().detach().numpy(), phi_inv[:, col, 0].cpu().detach().numpy(), 'm')
+
+    plt.title("Diffeomorphic deformation grid")
+    plt.show()
+
     
 if __name__ == '__main__':
     main()
 
+
+#--EXTRA CONTENT
 
 
 # I1_np = I1.squeeze().cpu().detach().numpy()
@@ -229,9 +262,6 @@ if __name__ == '__main__':
 # sitk.WriteImage(sitk.GetImageFromArray(I1_np), output_path + '/I1.nii')
 # sitk.WriteImage(sitk.GetImageFromArray(I2_np), output_path + '/I2.nii')
 # sitk.WriteImage(sitk.GetImageFromArray(y_src_np), output_path + '/y_src.nii')
-
-
-
 
 
 
@@ -249,10 +279,6 @@ if __name__ == '__main__':
 
 # plt.title("Mapa de flujo de deformación")
 # plt.show()
-
-
-
-
 
 
 # I1_seg_warped = F.grid_sample(I1_seg, phi_inv.unsqueeze(0), mode='nearest')

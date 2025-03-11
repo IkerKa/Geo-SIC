@@ -20,6 +20,10 @@ from easydict import EasyDict as edict  # type: ignore
 import nibabel as nib #type: ignore
 import random 
 import yaml
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+sys.path.append(parent_dir)
+
 from losses import NCC, MSE, Grad
 from networks import UnetDense  
 from SitkDataSet import SitkDataset as SData
@@ -50,9 +54,9 @@ import pdb
 import warnings
 warnings.filterwarnings("ignore")
 
-# pretrain_epochs_list = [5, 10, 20, 50, 100, 200, 300, 450, 600, 800, 1000]
+pretrain_epochs_list = [5, 10, 20, 50, 100, 200, 300, 450, 600, 800, 1000, 1500, 2000]
 # pretrain_epochs_list = [5, 10, 15]
-pretrain_epochs_list = [50, 100, 200]
+# pretrain_epochs_list = [50, 100, 200]
 list_len = len(pretrain_epochs_list)
 
 #TODO: Test also different learning rates / parameters 

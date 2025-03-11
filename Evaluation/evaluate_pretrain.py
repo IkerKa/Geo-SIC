@@ -20,6 +20,7 @@ from easydict import EasyDict as edict  # type: ignore
 import nibabel as nib #type: ignore
 import random 
 import yaml
+import torchvision.transforms as transforms
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 sys.path.append(parent_dir)
@@ -68,6 +69,18 @@ def load_parameters():
 def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index=5, src_index=7):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
+
+
+def load_debug_data(image_datadir = 'datasets/images/circle.png'):
+    datahandler = dh(
+            dataset_type='image_transform',
+            image_path=image_datadir,
+            samples=1,
+            # size=(128, 128),
+            shape_seg=False
+        )
+    
+    return datahandler.get_image(0)
 
 # Convert images to tensors
 def convert_to_tensor(image, device):
@@ -123,6 +136,11 @@ def save_metrics(output_path, I2, y_src, mean_dice_score):
                        data_range=y_src.squeeze().cpu().detach().numpy().max() - y_src.squeeze().cpu().detach().numpy().min())
     mse_score = np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy())**2)
     metrics = {'ssim': float(ssim_score), 'mse': float(mse_score), 'dice': float(mean_dice_score)}
+
+    print(f'SSIM: {ssim_score}')
+    print(f'MSE: {mse_score}')
+    print(f'Dice: {mean_dice_score}')
+
     with open(os.path.join(output_path, 'metrics.json'), 'w') as f:
         json.dump(metrics, f, indent=4)
 
@@ -162,7 +180,7 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg):
     dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
     dice = np.mean(dice_scores)
 
-    print(f'Mean Dice score: {dice}')
+    # print(f'Mean Dice score: {dice}')
 
 
     #compute dice score for each label
@@ -185,30 +203,79 @@ def main():
     args = parse_arguments()
     para, device = load_parameters()
 
-    #if there isnt an output directory, create it
-    if not os.path.exists(args.output) and args.output != None:
-        os.makedirs(args.output)
+    _debug = False
+
+    if _debug:
+        circle_path = 'datasets/images/circle.png'
+        input_image = load_debug_data(circle_path)
+        #read image as target
+        target_image = Image.open(circle_path).convert('L')
+        transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
+        target_image = transform(target_image).unsqueeze(0).to(device)
+        target_image = target_image.squeeze(0)
+        #resize input image to 128x128
+        input_image = transforms.Resize((128, 128))(input_image)
+
+        #convert both to tensor
+        I1 = convert_to_tensor(input_image, device)
+        I2 = convert_to_tensor(target_image, device)
+        I1_seg = None
+        I2_seg = None
+
+        print(f'Input image shape: {I1.shape}')
+        print(f'Target image shape: {I2.shape}')
+
+
+        #plot
+        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[0].set_title('Source Image (I1)')
+        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[1].set_title('Target Image (I2)')
+        plt.show()
+
+
+    else:
+        #if there isnt an output directory, create it
+        if not os.path.exists(args.output) and args.output != None:
+            os.makedirs(args.output)
 
 
 
-    target_index = 4
-    source_index = 13
+        target_index = 4
+        source_index = 13
 
-    (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
+        (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
 
-    #check if segmentations has same size as images
-    if input_image.shape != input_segmentation.shape:
-        raise ValueError('Input image and segmentation must have the same size')
-    
-    I1 = convert_to_tensor(input_image, device)
-    I2 = convert_to_tensor(target_image, device)
-    I1_seg = convert_to_tensor(input_segmentation, device)
-    I2_seg = convert_to_tensor(target_segmentation, device)
-    
+        #check if segmentations has same size as images
+        if input_image.shape != input_segmentation.shape:
+            raise ValueError('Input image and segmentation must have the same size')
+        
+        I1 = convert_to_tensor(input_image, device)
+        I2 = convert_to_tensor(target_image, device)
+        I1_seg = convert_to_tensor(input_segmentation, device)
+        I2_seg = convert_to_tensor(target_segmentation, device)
+        
     net, _, optimizer = initialize_network_optimizer2D(128, 128, para, device)
     phi_inv, y_src = train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, args.pretrain, args.output)
+
+    mean_dice_score = 0
+
     
-    warped_seg_np, fixed_seg_np, mean_dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg)
+    if I1_seg is not None and I2_seg is not None:
+        warped_seg_np, fixed_seg_np, mean_dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg)
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        axes[0].imshow(warped_seg_np, cmap='gray')
+        axes[0].set_title('Registered Segmentation (I1 → I2)')
+        axes[1].imshow(fixed_seg_np, cmap='gray')
+        axes[1].set_title('Target Segmentation (I2)')
+        overlay = np.maximum(warped_seg_np, fixed_seg_np)
+        axes[2].imshow(overlay, cmap='gray')
+        axes[2].set_title('Overlay of Segmentations')
+        plt.show()
+
+    
     if args.output:
         save_metrics(args.output, I2, y_src, mean_dice_score)
 
@@ -227,17 +294,31 @@ def main():
     plt.title("Error Map")
     plt.show()
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    axes[0].imshow(warped_seg_np, cmap='gray')
-    axes[0].set_title('Registered Segmentation (I1 → I2)')
-    axes[1].imshow(fixed_seg_np, cmap='gray')
-    axes[1].set_title('Target Segmentation (I2)')
-    overlay = np.maximum(warped_seg_np, fixed_seg_np)
-    axes[2].imshow(overlay, cmap='gray')
-    axes[2].set_title('Overlay of Segmentations')
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    ax.imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+
+    H, W = I1.shape[2], I1.shape[3]  # Asumiendo formato [B, C, H, W]
+
+    #convert phi from -1,1 to image 
+    phi_inv_np = phi_inv.cpu().detach().numpy()
+    phi_inv_x = (phi_inv_np[:, :, 1] + 1) * (W - 1) / 2  # X coordinates
+    phi_inv_y = (phi_inv_np[:, :, 0] + 1) * (H - 1) / 2  # Y coordinates
+
+    
+    interval = 2
+    for row in range(0, H, interval):
+        ax.plot(phi_inv_x[row, :], phi_inv_y[row, :], 'm')  
+    for col in range(0, W, interval):
+        ax.plot(phi_inv_x[:, col], phi_inv_y[:, col], 'm')  
+
+    plt.title("Diffeomorphic deformation grid overlaid on Source Image")
     plt.show()
 
-    fig, ax = plt.subplots()
+
+    # Plot deformation 
+    fig, ax = plt.subplots(figsize=(6, 6))
     interval = 2
     for row in range(0, phi_inv.shape[0], interval):
         ax.plot(phi_inv[row, :, 1].cpu().detach().numpy(), phi_inv[row, :, 0].cpu().detach().numpy(), 'm')
@@ -246,8 +327,7 @@ def main():
 
     plt.title("Diffeomorphic deformation grid")
     plt.show()
-
-    
+            
 if __name__ == '__main__':
     main()
 

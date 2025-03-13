@@ -413,10 +413,13 @@ class NiftiDataset(Dataset):
             seg_data = self.seg_images[idx]
             if isinstance(seg_data, nib.Nifti1Image):
                 seg_data = seg_data.get_fdata()
+
             seg_slice = seg_data[:, :, z_idx]
             seg_slice = cv2.resize(seg_slice, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
-            seg_slice = (seg_slice - np.min(seg_slice)) / (np.max(seg_slice) - np.min(seg_slice) + 1e-8)
-            seg_tensor = torch.from_numpy(seg_slice).unsqueeze(0).float()
+
+            seg_slice = seg_slice.astype(np.uint8)
+            seg_tensor = torch.from_numpy(seg_slice).unsqueeze(0).long()  
+
             return image_tensor, seg_tensor
         
         else:

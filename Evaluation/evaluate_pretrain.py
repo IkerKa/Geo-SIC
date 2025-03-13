@@ -101,7 +101,7 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
         optimizer.zero_grad()
         y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
         
-        dist_loss = NCC().loss(y_src, I2)
+        dist_loss = NCC(win=[21,21]).loss(y_src, I2)
         reg_loss = Grad(penalty='l2').loss2D(momentum)
         
         loss_total = dist_loss + reg_loss
@@ -114,7 +114,14 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
         
         
         with torch.no_grad():
+            # print(f'New locations shape: {new_locs.shape}')
             phi_inv = new_locs[0, ...]
+            final_new_locs = new_locs
+            # print(f'Phi_inv shape: {phi_inv.shape}')
+            # print(f'Final new locations shape: {final_new_locs.shape}')
+
+            
+
 
     #plot graph
     fig, ax = plt.subplots(1, 2, figsize=(15, 5))
@@ -134,11 +141,11 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
 def save_metrics(output_path, I2, y_src, mean_dice_score):
     ssim_score = ssim(I2.squeeze().cpu().detach().numpy(), y_src.squeeze().cpu().detach().numpy(),
                        data_range=y_src.squeeze().cpu().detach().numpy().max() - y_src.squeeze().cpu().detach().numpy().min())
-    mse_score = np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy())**2)
-    metrics = {'ssim': float(ssim_score), 'mse': float(mse_score), 'dice': float(mean_dice_score)}
+    rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy())**2))
+    metrics = {'ssim': float(ssim_score), 'rmse': float(rmse_score), 'dice': float(mean_dice_score)}
 
     print(f'SSIM: {ssim_score}')
-    print(f'MSE: {mse_score}')
+    print(f'RMSE: {rmse_score}')
     print(f'Dice: {mean_dice_score}')
 
     with open(os.path.join(output_path, 'metrics.json'), 'w') as f:
@@ -165,16 +172,45 @@ def compute_dice(warped_moving, fixed, labels):
 
 
 # Compute and visualize segmentation
-def compute_segmentation(I1_seg, phi_inv, I2_seg):
+def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
-    warped_seg = F.grid_sample(I1_seg, phi_inv.unsqueeze(0), mode='nearest')
+    #transpose phi_inv
+    assert I1_seg.shape == I1_seg.shape, "Image and segmentation must have the same shape!"
+    assert I2_seg.shape == I2_seg.shape, "Target image and segmentation must have the same shape!"
+
+    
+    
+    # phi_inv = phi_inv.permute(0, 2, 3, 1)
+    # phi_inv = phi_inv.permute(0, 3, 2, 1) 
+
+    #transpose the content of phi_inv
+    # phi_inv = phi_inv.permute(1, 2, 0).unsqueeze(0)
+
+    # print(f'Phi_inv shape: {phi_inv.shape}')
+
+    # phi_inv = phi_inv.permute(0, 3, 1, 2)  # Ensure the last dimension is 2
+
+    # print(f'Phi_inv shape: {phi_inv.shape}')
+
+    # phi_inv = phi_inv.permute(1, 2, 0).unsqueeze(0)
+    # phi_inv = phi_inv.permute(0, 1, 3, 2)
+    # phi_inv = phi_inv[..., [1, 0]]  # Swap the last two dimensions
+
+    # print(f'Phi_inv shape: {phi_inv.shape}')    
+
+    # phi_inv = phi_inv.unsqueeze(0)
+    phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
+    print(f'Phi_inv shape: {phi_inv.shape}')
+    st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)
+    warped_seg = st_seg(I1_seg, phi_inv)
+
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
     fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
-    dice_score = dc(warped_seg_np, fixed_seg_np)
+    # dice_score = dc(warped_seg_np, fixed_seg_np)
 
     #take the labels
-    labels = np.unique(fixed_seg_np) #should be the same for both segmentations
-    labels = labels[labels != 0] #remove background label
+    labels = np.unique(fixed_seg_np) 
+    labels = labels[labels != 0] 
 
     #compute dice score for each label
     dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
@@ -263,7 +299,7 @@ def main():
 
     
     if I1_seg is not None and I2_seg is not None:
-        warped_seg_np, fixed_seg_np, mean_dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg)
+        warped_seg_np, fixed_seg_np, mean_dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg, device)
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         axes[0].imshow(warped_seg_np, cmap='gray')
@@ -289,7 +325,7 @@ def main():
     axes[2].set_title('Registered Image (y_src)')
     plt.show()
     
-    plt.imshow(np.abs(I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()), cmap='hot')
+    plt.imshow(np.abs(I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()), cmap='gray')
     plt.colorbar()
     plt.title("Error Map")
     plt.show()
@@ -306,6 +342,11 @@ def main():
     phi_inv_x = (phi_inv_np[:, :, 1] + 1) * (W - 1) / 2  # X coordinates
     phi_inv_y = (phi_inv_np[:, :, 0] + 1) * (H - 1) / 2  # Y coordinates
 
+    #transpose the phi_inv
+    phi_inv_x = np.transpose(phi_inv_x)
+    phi_inv_y = np.transpose(phi_inv_y)
+
+
     
     interval = 2
     for row in range(0, H, interval):
@@ -317,17 +358,25 @@ def main():
     plt.show()
 
 
-    # Plot deformation 
+    # Plot deformation
+
     fig, ax = plt.subplots(figsize=(6, 6))
     interval = 2
+
     for row in range(0, phi_inv.shape[0], interval):
-        ax.plot(phi_inv[row, :, 1].cpu().detach().numpy(), phi_inv[row, :, 0].cpu().detach().numpy(), 'm')
+        ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),  
+                phi_inv[row, :, 1].cpu().detach().numpy(),  
+                'm')
+
     for col in range(0, phi_inv.shape[1], interval):
-        ax.plot(phi_inv[:, col, 1].cpu().detach().numpy(), phi_inv[:, col, 0].cpu().detach().numpy(), 'm')
+        ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),  
+                phi_inv[:, col, 1].cpu().detach().numpy(),  
+                'm')
 
     plt.title("Diffeomorphic deformation grid")
+
     plt.show()
-            
+
 if __name__ == '__main__':
     main()
 

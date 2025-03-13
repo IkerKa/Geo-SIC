@@ -53,7 +53,6 @@ def extract_middle_slice(file_path):
 
     return middle_slice
 
-# Example usage
 volume_dir = './nirep/nifti'
 volume_files = [os.path.join(volume_dir, f'na{num:02d}.nii.gz') for num in range(1, 17)]
 

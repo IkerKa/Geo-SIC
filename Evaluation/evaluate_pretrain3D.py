@@ -42,10 +42,12 @@ import matplotlib.pyplot as plt # type: ignore
 from datasets.datasethandler import DataHandler as dh
 import SimpleITK as sitk # type: ignore
 
-from Run_Atlas_trainer import initialize_network_optimizer2D, read_yaml
+from Run_Atlas_trainer import initialize_network_optimizer,  read_yaml
 
 from skimage.metrics import structural_similarity as ssim # type: ignore
 from medpy.metric.binary import dc
+
+import tqdm
 
 #debug argument
 import pdb
@@ -66,8 +68,9 @@ def load_parameters():
     return para, device
 
 # Load Data
-def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index=5, src_index=7):
-    datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
+def load_data(nifti_datadir='nirep/nifti/', size=128, tgt_index=5, src_index=7):
+    datahandler = dh(dataset_type='nifti3d', directory=nifti_datadir, size=size, seg=True)
+
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
 
@@ -96,13 +99,17 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
     ssim_per_epoch = []
     loss_per_epoch = []
     
-    for epoch in range(num_epochs):
+
+    print(f'Input image shape: {I1.shape}')
+    print(f'Target image shape: {I2.shape}')
+
+    for epoch in tqdm.tqdm(range(num_epochs), desc="Training Epochs"):
         net.eval()
         optimizer.zero_grad()
         y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
-        
-        dist_loss = NCC(win=[21,21]).loss(y_src, I2)
-        reg_loss = Grad(penalty='l2').loss2D(momentum)
+
+        dist_loss = NCC().loss(y_src, I2)
+        reg_loss = Grad(penalty='l2').loss(momentum)
         
         loss_total = dist_loss + reg_loss
         loss_total.backward()
@@ -112,13 +119,9 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
         ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
         
-        
         with torch.no_grad():
-            # print(f'New locations shape: {new_locs.shape}')
             phi_inv = new_locs[0, ...]
             final_new_locs = new_locs
-            # print(f'Phi_inv shape: {phi_inv.shape}')
-            # print(f'Final new locations shape: {final_new_locs.shape}')
 
             
 
@@ -198,10 +201,9 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
     # print(f'Phi_inv shape: {phi_inv.shape}')    
 
-    # phi_inv = phi_inv.unsqueeze(0)
-    phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
+    phi_inv = phi_inv.permute(3, 0, 1, 2).unsqueeze(0)
     print(f'Phi_inv shape: {phi_inv.shape}')
-    st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)
+    st_seg = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
     warped_seg = st_seg(I1_seg, phi_inv)
 
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
@@ -242,23 +244,15 @@ def main():
     _debug = False
 
     if _debug:
-        # circle_path = 'datasets/images/circle.png'
-        # input_image = load_debug_data(circle_path)
-        # #read image as target
-        # target_image = Image.open(circle_path).convert('L')
-        # transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
-        # target_image = transform(target_image).unsqueeze(0).to(device)
-        # target_image = target_image.squeeze(0)
-        # #resize input image to 128x128
-        # input_image = transforms.Resize((128, 128))(input_image)
-
-        #read circle.png and circle_2.png and convert them to tensors
-        target_image = Image.open('datasets/images/circle.png').convert('L')
-        input_image = Image.open('datasets/images/circle_2.png').convert('L')
+        circle_path = 'datasets/images/circle.png'
+        input_image = load_debug_data(circle_path)
+        #read image as target
+        target_image = Image.open(circle_path).convert('L')
         transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
-        input_image = transform(input_image).to(device)
-        target_image = transform(target_image).to(device)
-
+        target_image = transform(target_image).unsqueeze(0).to(device)
+        target_image = target_image.squeeze(0)
+        #resize input image to 128x128
+        input_image = transforms.Resize((128, 128))(input_image)
 
         #convert both to tensor
         I1 = convert_to_tensor(input_image, device)
@@ -290,9 +284,10 @@ def main():
         source_index = 2
 
         (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
-        
-        print(f'Input image shape: {input_image.shape}')
-        print(f'Target image shape: {target_image.shape}')
+
+        #visualize an slice from the volume
+
+
 
         #check if segmentations has same size as images
         if input_image.shape != input_segmentation.shape:
@@ -302,8 +297,12 @@ def main():
         I2 = convert_to_tensor(target_image, device)
         I1_seg = convert_to_tensor(input_segmentation, device)
         I2_seg = convert_to_tensor(target_segmentation, device)
+
+        print(f'Input image shape: {I1.shape}')
+        print(f'Target image shape: {I2.shape}')
+
         
-    net, _, optimizer = initialize_network_optimizer2D(128, 128, para, device)
+    net, _, optimizer = initialize_network_optimizer(128, 128, 256, para, device)
     phi_inv, y_src = train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, args.pretrain, args.output)
 
     mean_dice_score = 0
@@ -313,13 +312,18 @@ def main():
         warped_seg_np, fixed_seg_np, mean_dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg, device)
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        axes[0].imshow(warped_seg_np, cmap='gray')
+        slice_idx = warped_seg_np.shape[2] // 2  # Assuming shape [B, C, H, W, D]
+        warped_seg_slice = warped_seg_np[:, :, slice_idx]  # (H, W)
+        fixed_seg_slice = fixed_seg_np[:, :, slice_idx]  # (H, W)
+        overlay_slice = np.maximum(warped_seg_slice, fixed_seg_slice)
+
+        axes[0].imshow(warped_seg_slice, cmap='gray')
         axes[0].set_title('Registered Segmentation (I1 → I2)')
-        axes[1].imshow(fixed_seg_np, cmap='gray')
+        axes[1].imshow(fixed_seg_slice, cmap='gray')
         axes[1].set_title('Target Segmentation (I2)')
-        overlay = np.maximum(warped_seg_np, fixed_seg_np)
-        axes[2].imshow(overlay, cmap='gray')
+        axes[2].imshow(overlay_slice, cmap='gray')
         axes[2].set_title('Overlay of Segmentations')
+
         plt.show()
 
     
@@ -328,66 +332,59 @@ def main():
 
     # Visualization
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+
+    #For sagital views: [slice_idx, :, :], for coronal views: [:, slice_idx, :], for axial views: [:, :, slice_idx]
+    #Take the grid from the same slice!
+
+    # Get middle slice index (D // 2)
+    slice_idx = I1.shape[4] // 2  # Assuming shape [B, C, H, W, D]
+
+    # Extract the same slice from each volume
+    I1_slice = I1.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
+    I2_slice = I2.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
+    y_src_slice = y_src.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
+
+    # Plot each image
+    axes[0].imshow(I1_slice, cmap='gray')
     axes[0].set_title('Source Image (I1)')
-    axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
+    axes[1].imshow(I2_slice, cmap='gray')
     axes[1].set_title('Target Image (I2)')
-    axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
+    axes[2].imshow(y_src_slice, cmap='gray')
     axes[2].set_title('Registered Image (y_src)')
+
     plt.show()
-    
-    plt.imshow(np.abs(I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()), cmap='gray')
+
+    # Error map for the selected slice
+    error_map = np.abs(I2_slice - y_src_slice)
+    plt.imshow(error_map, cmap='gray')
     plt.colorbar()
     plt.title("Error Map")
     plt.show()
-    
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    #TODO: plot the grid FIX IIIIT
 
-    ax.imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+    #Deformation grid
+    # fig = plt.figure(figsize=(10, 10))
+    # ax = fig.add_subplot(111, projection='3d')
+    # interval = 2
+    # fig, ax = plt.subplots(figsize=(6, 6))
+    # interval = 2
 
-    H, W = I1.shape[2], I1.shape[3]  # Asumiendo formato [B, C, H, W]
+    # for row in range(0, phi_inv.shape[1], interval):
+    #     for col in range(0, phi_inv.shape[2], interval):
+    #         ax.plot(phi_inv[0, row, col, 0].cpu().detach().numpy(),  
+    #                 phi_inv[0, row, col, 1].cpu().detach().numpy(),  
+    #                 'm')
 
-    #convert phi from -1,1 to image 
-    phi_inv_np = phi_inv.cpu().detach().numpy()
-    phi_inv_x = (phi_inv_np[:, :, 1] + 1) * (W - 1) / 2  # X coordinates
-    phi_inv_y = (phi_inv_np[:, :, 0] + 1) * (H - 1) / 2  # Y coordinates
+    # for depth in range(0, phi_inv.shape[3], interval):
+    #     for col in range(0, phi_inv.shape[2], interval):
+    #         ax.plot(phi_inv[0, :, col, depth].cpu().detach().numpy(),  
+    #                 phi_inv[0, :, col, depth].cpu().detach().numpy(),  
+    #                 'm')
 
-    #transpose the phi_inv
-    phi_inv_x = np.transpose(phi_inv_x)
-    phi_inv_y = np.transpose(phi_inv_y)
+    # plt.title("Diffeomorphic deformation grid")
 
-
-    
-    interval = 2
-    for row in range(0, H, interval):
-        ax.plot(phi_inv_x[row, :], phi_inv_y[row, :], 'm')  
-    for col in range(0, W, interval):
-        ax.plot(phi_inv_x[:, col], phi_inv_y[:, col], 'm')  
-
-    plt.title("Diffeomorphic deformation grid overlaid on Source Image")
-    plt.show()
-
-
-    # Plot deformation
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    interval = 2
-
-    for row in range(0, phi_inv.shape[0], interval):
-        ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),  
-                phi_inv[row, :, 1].cpu().detach().numpy(),  
-                'm')
-
-    for col in range(0, phi_inv.shape[1], interval):
-        ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),  
-                phi_inv[:, col, 1].cpu().detach().numpy(),  
-                'm')
-
-    plt.title("Diffeomorphic deformation grid")
-
-    plt.show()
-
+    # plt.show()
 if __name__ == '__main__':
     main()
 

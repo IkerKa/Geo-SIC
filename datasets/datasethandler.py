@@ -425,6 +425,81 @@ class NiftiDataset(Dataset):
         else:
             return image_tensor
 
+class NiftiDataset3D(Dataset):
+    """
+    Dataset to load 3D NIfTI volumes instead of individual slices.
+    """
+    def __init__(self, directory, size=None, transform=None, seg=False):
+        """
+        Args:
+            directory (str): Path to the directory containing the NIfTI files.
+            size (tuple or None): Desired (H, W) size for resizing (e.g., (128, 128)).
+            transform (callable, optional): Transformation applied to the tensor.
+            seg (bool): Whether to load corresponding segmentation masks.
+        """
+        self.size = size
+        self.transform = transform
+        self.seg = seg
+
+        # List image and segmentation files
+        all_files = [f for f in os.listdir(directory) if f.endswith('.nii.gz') 
+                     and not f.endswith('_seg.nii.gz') and f.startswith('na')]
+        all_seg_files = [f for f in os.listdir(directory) if f.endswith('_seg.nii.gz')
+                         and f.startswith('na')]
+
+        self.files = sorted(all_files)
+        self.seg_files = sorted(all_seg_files)
+
+        # Load NIfTI images
+        self.images = [nib.load(os.path.join(directory, f)) for f in self.files]
+        self.seg_images = [nib.load(os.path.join(directory, f)) for f in self.seg_files] if seg else None
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        """Loads entire 3D volume (C, D, H, W) instead of a single slice."""
+        
+        # Load Image
+        image_data = self.images[idx].get_fdata()  # Shape: (H, W, D)
+        depth = image_data.shape[2]  # Number of slices
+
+        # Resize if needed
+        if self.size is not None:
+            size = (self.size, self.size)
+            image_data = np.stack([cv2.resize(image_data[:, :, i], size, interpolation=cv2.INTER_LINEAR)
+                                      for i in range(depth)], axis=-1)
+            
+
+
+        # Convert to tensor [C, D, H, W]
+        volume_tensor = torch.from_numpy(image_data).unsqueeze(0).float()  # (1, D, H, W)
+
+        if self.transform:
+            volume_tensor = self.transform(volume_tensor)
+
+        if self.seg:
+            # Load segmentation
+            seg_data = self.seg_images[idx].get_fdata()  # Shape: (H, W, D)
+
+            # Resize if needed
+            if self.size is not None:
+                size = (self.size, self.size)
+                seg_data = np.stack([cv2.resize(seg_data[:, :, i], size, interpolation=cv2.INTER_NEAREST)
+                                     for i in range(depth)], axis=-1)
+                
+
+            # Convert to tensor [C, D, H, W]
+            seg_tensor = torch.from_numpy(seg_data).unsqueeze(0).long()
+
+
+
+
+
+            return volume_tensor, seg_tensor
+
+        return volume_tensor
+    
 class DataHandler:
     def __init__(self, dataset_type, **kwargs):
         """
@@ -445,6 +520,8 @@ class DataHandler:
             return ShapeDataset(**kwargs)
         elif dataset_type == 'nifti':
             return NiftiDataset(**kwargs)
+        elif dataset_type == 'nifti3d':
+            return NiftiDataset3D(**kwargs)
         else:
             raise ValueError(f"Dataloader type '{dataset_type}' not recognized.")
     
@@ -453,4 +530,7 @@ class DataHandler:
     
     def get_image(self, idx):
         return self.dataset[idx]
+    
+    def get_all_images(self):
+        return [self.dataset[i] for i in range(len(self.dataset))]
     

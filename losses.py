@@ -3,6 +3,11 @@ import torch.nn.functional as F
 import numpy as np
 import math
 
+#conv2d and conv3d
+#https://pytorch.org/docs/stable/nn.functional.html#conv2d
+#https://pytorch.org/docs/stable/nn.functional.html#conv3d
+
+
 
 class NCC:
     """
@@ -65,8 +70,7 @@ class NCC:
         cc = cross * cross / (I_var * J_var + 1e-5)
 
         return -torch.mean(cc)
-
-
+    
 class MSE:
     """
     Mean squared error loss.

@@ -78,6 +78,34 @@ def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149):
 def get_tensor_dataset(dataset, device):
     return [convert_to_tensor(image, device) for image in dataset]
 
+def compute_dice(test_shapes, train_shapes, phi_inv, device, output_path):
+    I1_shape = convert_to_tensor(test_shapes[0], device)
+    I2_shape = convert_to_tensor(test_shapes[1], device)
+    # I2_shape = convert_to_tensor(train_shapes[0], device)
+
+    # I1 composed with phi_inv should be close to I2 -> warping I1 with phi_inv should give I2
+    y_src_shape = F.grid_sample(I1_shape, phi_inv.unsqueeze(0), align_corners=True, mode='nearest')
+
+    # Compute Dice score
+    y_src_shape = y_src_shape.squeeze().cpu().detach().numpy()
+    I2_shape = I2_shape.squeeze().cpu().detach().numpy()
+
+    dice_score = dc(y_src_shape, I2_shape)
+    # print(f'Dice score: {dice_score}')
+
+    # plot collage of shapes 
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(y_src_shape, cmap='gray')
+    axes[0].set_title('Registered Shape (y_src_shape)')
+    axes[1].imshow(I2_shape, cmap='gray')
+    axes[1].set_title('Target Shape (I2_shape)')
+    axes[2].imshow(y_src_shape - I2_shape, cmap='gray')
+    axes[2].set_title('Difference')
+    plt.show()
+
+
+
+    return dice_score
 
 
 
@@ -97,7 +125,7 @@ def convert_to_tensor(image, device):
     return torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
 
 # Train the model
-def train_model(net, optimizer, num_epochs, tensor_dataset):
+def train_model(net, optimizer, num_epochs, train_dataset, test_dataset):
     loss_total = 0
     phi_inv = None
     
@@ -106,6 +134,8 @@ def train_model(net, optimizer, num_epochs, tensor_dataset):
     ssim_per_epoch = []
     loss_per_epoch = []
 
+    I1_fixed = test_dataset[0]
+
     tqdm_epochs = tqdm.tqdm(range(num_epochs))
     for epoch in tqdm_epochs:
         tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
@@ -113,14 +143,15 @@ def train_model(net, optimizer, num_epochs, tensor_dataset):
         net.eval()
         optimizer.zero_grad()
 
-        #on each epoch we will get 2 random indexes from 1 to len(tensor_dataset)
-        idx = random.sample(range(1, len(tensor_dataset)), 2)
-        I1 = tensor_dataset[idx[0]]
-        I2 = tensor_dataset[idx[1]]
+        #The training now is by selecting one random image from the train dataset while fixing the other image (that will be used for the training)
+        idx = random.randint(0, len(train_dataset) - 1)
+        I1 = I1_fixed
+        I2 = train_dataset[idx]
+
 
         y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
         
-        dist_loss = NCC(win=[21,21]).loss(y_src, I2)
+        dist_loss = NCC(win=[9,9]).loss(y_src, I2)
         reg_loss = Grad(penalty='l2').loss2D(momentum)
         
         loss_total = dist_loss + reg_loss
@@ -151,19 +182,20 @@ def train_model(net, optimizer, num_epochs, tensor_dataset):
     
     return phi_inv, y_src
 
-def evaluate_model(phi_inv, test_dataset, device, args):
+def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shapes, device, args):
 
 
     #Take the test images
     I1 = convert_to_tensor(test_dataset[0], device)
     I2 = convert_to_tensor(test_dataset[1], device)
+    # I2 = convert_to_tensor(train_dataset[0], device)
 
     # I1 composed with phi_inv should be close to I2 -> warping I1 with phi_inv should give I2
     y_src = F.grid_sample(I1, phi_inv.unsqueeze(0), align_corners=True, mode='bilinear')
 
-
+    dice_score = compute_dice(test_shapes, train_shapes, phi_inv, device, args.output)
     if args.output:
-        save_metrics(args.output, I2, y_src, 0)
+        save_metrics(args.output, I2, y_src, dice_score)
 
     # Visualization
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -191,8 +223,8 @@ def evaluate_model(phi_inv, test_dataset, device, args):
     
     #Collage for the absolute error
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    axes[0].imshow(np.abs(I2.squeeze().cpu().detach().numpy() - I1.squeeze().cpu().detach().numpy()), cmap='gray')
-    axes[0].set_title('Absolute Error')
+    axes[0].imshow(I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy(), cmap='gray')
+    axes[0].set_title('Error')
     axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
     axes[1].set_title('Target Image (I2)')
     axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
@@ -254,6 +286,8 @@ def evaluate_model(phi_inv, test_dataset, device, args):
     # ax.quiver(X, Y, U, V, angles='xy', scale_units='xy', scale=1, color='m')
     # plt.title("Deformation Field")
     # plt.show()
+    
+    # Compute Dice score
 
 
 
@@ -316,31 +350,33 @@ def main():
 
 
 
-        all_dataset, all_shapes  = load_all_data()
+        all_dataset = load_all_data()
 
-        print(f'Number of images: {len(all_dataset)}')
-        print(f'Number of shapes: {len(all_shapes)}')
+        #all_dataset = (image, shape) 16 times
+
 
         #--save 2 images for testing
-        test_source = 1
-        test_target = 2
 
-        train_dataset = all_dataset[2:]
-        test_dataset = all_dataset[:2]
-
+        train_dataset = [data[0] for data in all_dataset[2:]]
+        train_shapes = [data[1] for data in all_dataset[2:]]
+        test_dataset = [data[0] for data in all_dataset[:2]]
+        test_shapes = [data[1] for data in all_dataset[:2]]
 
         #take as many random pairs as the number of epochs
         n_epochs = args.pretrain
 
         print(f'Getting the tensor files...')
-        tensor_dataset = get_tensor_dataset(train_dataset, device)
+        train_tensor_dataset = get_tensor_dataset(train_dataset, device)
+        test_tensor_dataset = get_tensor_dataset(test_dataset, device)
         print(f'Got the tensor files...')
 
     net, _, optimizer = initialize_network_optimizer2D(128, 128, para, device)
-    phi_inv, y_src = train_model(net, optimizer, args.pretrain, tensor_dataset)
+    phi_inv, y_src = train_model(net, optimizer, args.pretrain, train_tensor_dataset, test_tensor_dataset)
     
     
-    evaluate_model(phi_inv, test_dataset, device, args)
+    evaluate_model(phi_inv, test_dataset, test_shapes,train_dataset, train_shapes, device, args)
+
+    
     
     print('Done!')
 

@@ -78,34 +78,25 @@ def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149):
 def get_tensor_dataset(dataset, device):
     return [convert_to_tensor(image, device) for image in dataset]
 
-def compute_dice(test_shapes, train_shapes, phi_inv, device, output_path):
-    I1_shape = convert_to_tensor(test_shapes[0], device)
-    I2_shape = convert_to_tensor(test_shapes[1], device)
-    # I2_shape = convert_to_tensor(train_shapes[0], device)
 
-    # I1 composed with phi_inv should be close to I2 -> warping I1 with phi_inv should give I2
-    y_src_shape = F.grid_sample(I1_shape, phi_inv.unsqueeze(0), align_corners=True, mode='nearest')
+#Function taken from NODEO
+def compute_dice(warped_moving, fixed, labels):
+    """
+    Computes the dice overlap between two arrays for a given set of integer labels.
+    """
+    assert warped_moving is not None 
+    assert fixed is not None 
 
-    # Compute Dice score
-    y_src_shape = y_src_shape.squeeze().cpu().detach().numpy()
-    I2_shape = I2_shape.squeeze().cpu().detach().numpy()
+    dicem = np.zeros(len(labels))
 
-    dice_score = dc(y_src_shape, I2_shape)
-    # print(f'Dice score: {dice_score}')
+    for idx, label in enumerate(labels):
+        top = 2 * np.sum(np.logical_and(warped_moving == label, fixed == label))
+        bottom = np.sum(warped_moving == label) + np.sum(fixed == label)
+        bottom = np.maximum(bottom, np.finfo(float).eps)  # add epsilon
+        dicem[idx] = top / bottom
+        
+    return dicem
 
-    # plot collage of shapes 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    axes[0].imshow(y_src_shape, cmap='gray')
-    axes[0].set_title('Registered Shape (y_src_shape)')
-    axes[1].imshow(I2_shape, cmap='gray')
-    axes[1].set_title('Target Shape (I2_shape)')
-    axes[2].imshow(y_src_shape - I2_shape, cmap='gray')
-    axes[2].set_title('Difference')
-    plt.show()
-
-
-
-    return dice_score
 
 
 
@@ -182,6 +173,33 @@ def train_model(net, optimizer, num_epochs, train_dataset, test_dataset):
     
     return phi_inv, y_src
 
+def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
+
+    #transpose phi_inv
+    assert I1_seg.shape == I1_seg.shape, "Image and segmentation must have the same shape!"
+    assert I2_seg.shape == I2_seg.shape, "Target image and segmentation must have the same shape!"
+
+    phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
+    print(f'Phi_inv shape: {phi_inv.shape}')
+    st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)
+    warped_seg = st_seg(I1_seg, phi_inv)
+
+    warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
+    fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
+    # dice_score = dc(warped_seg_np, fixed_seg_np)
+
+    #take the labels
+    labels = np.unique(fixed_seg_np) 
+    labels = labels[labels != 0] 
+
+    #compute dice score for each label
+    dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
+    dice = np.mean(dice_scores)
+
+
+
+    return warped_seg_np, fixed_seg_np, dice
+
 def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shapes, device, args):
 
 
@@ -193,7 +211,9 @@ def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shap
     # I1 composed with phi_inv should be close to I2 -> warping I1 with phi_inv should give I2
     y_src = F.grid_sample(I1, phi_inv.unsqueeze(0), align_corners=True, mode='bilinear')
 
-    dice_score = compute_dice(test_shapes, train_shapes, phi_inv, device, args.output)
+    # For computing the dice, take the shapes and the labels
+    shapes = test_shapes
+    
     if args.output:
         save_metrics(args.output, I2, y_src, dice_score)
 

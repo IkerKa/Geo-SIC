@@ -41,7 +41,6 @@ import matplotlib.pyplot as plt # type: ignore
 # from datasets.shapedsloader import ShapesDataLoaderHandler as sdh
 from datasets.datasethandler import DataHandler as dh
 import tqdm
-import SimpleITK as sitk # type: ignore
 
 from Run_Atlas_trainer import initialize_network_optimizer2D, read_yaml
 
@@ -115,8 +114,19 @@ def load_debug_data(image_datadir = 'datasets/images/circle.png'):
 def convert_to_tensor(image, device):
     return torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
 
+
+def plot_pairs(image1, image2, title1='Image 1', title2='Image 2'):
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    axes[0].imshow(image1.squeeze().cpu().detach().numpy(), cmap='gray')
+    axes[0].set_title(title1)
+    axes[1].imshow(image2.squeeze().cpu().detach().numpy(), cmap='gray')
+    axes[1].set_title(title2)
+    plt.show()
+
+
+
 # Train the model
-def train_model(net, optimizer, num_epochs, train_dataset, test_dataset):
+def train_model(net, optimizer, num_epochs, train_dataset, test_dataset, weight_dist, weight_reg,device):
     loss_total = 0
     phi_inv = None
     
@@ -126,6 +136,8 @@ def train_model(net, optimizer, num_epochs, train_dataset, test_dataset):
     loss_per_epoch = []
 
     I1_fixed = test_dataset[0]
+
+    phi_inv, y_src = None, None
 
     tqdm_epochs = tqdm.tqdm(range(num_epochs))
     for epoch in tqdm_epochs:
@@ -139,17 +151,29 @@ def train_model(net, optimizer, num_epochs, train_dataset, test_dataset):
         I1 = I1_fixed
         I2 = train_dataset[idx]
 
+        # plot_pairs(I1, I2, title1='Fixed Image', title2='Random Image')
+
+        # #wait keyboard
+        # input("Press Enter to continue...")
+
+
+        I1 = I1.to(device).float()
+        I2 = I2.to(device).float()
+
+
 
         y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
         
         dist_loss = NCC(win=[9,9]).loss(y_src, I2)
         reg_loss = Grad(penalty='l2').loss2D(momentum)
         
-        loss_total = dist_loss + reg_loss
+        loss_total = weight_dist * dist_loss + weight_reg * reg_loss
         loss_total.backward()
         optimizer.step()
 
         loss_per_epoch.append(loss_total.item())
+
+        loss_total = 0.0
         ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
         
@@ -175,12 +199,8 @@ def train_model(net, optimizer, num_epochs, train_dataset, test_dataset):
 
 def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
-    #transpose phi_inv
-    assert I1_seg.shape == I1_seg.shape, "Image and segmentation must have the same shape!"
-    assert I2_seg.shape == I2_seg.shape, "Target image and segmentation must have the same shape!"
 
     phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
-    print(f'Phi_inv shape: {phi_inv.shape}')
     st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)
     warped_seg = st_seg(I1_seg, phi_inv)
 
@@ -206,14 +226,15 @@ def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shap
     #Take the test images
     I1 = convert_to_tensor(test_dataset[0], device)
     I2 = convert_to_tensor(test_dataset[1], device)
-    # I2 = convert_to_tensor(train_dataset[0], device)
+
+    I1_seg = convert_to_tensor(test_shapes[0], device)
+    I2_seg = convert_to_tensor(test_shapes[1], device)
 
     # I1 composed with phi_inv should be close to I2 -> warping I1 with phi_inv should give I2
     y_src = F.grid_sample(I1, phi_inv.unsqueeze(0), align_corners=True, mode='bilinear')
 
-    # For computing the dice, take the shapes and the labels
-    shapes = test_shapes
-    
+    warped_seg_np, fixed_seg_np, dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg, device)
+
     if args.output:
         save_metrics(args.output, I2, y_src, dice_score)
 
@@ -298,16 +319,16 @@ def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shap
 
     plt.show()
 
-    # fig, ax = plt.subplots(figsize=(6, 6))
-    # X, Y = np.meshgrid(np.arange(phi_inv.shape[1]), np.arange(phi_inv.shape[0]))
-    # U = phi_inv[:, :, 1].cpu().detach().numpy() - X  # Deformación en X
-    # V = phi_inv[:, :, 0].cpu().detach().numpy() - Y  # Deformación en Y
+    # Plot the segmentation error between warped and I2_Seg
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(warped_seg_np, cmap='gray')
+    axes[0].set_title('Warped Segmentation')
+    axes[1].imshow(fixed_seg_np, cmap='gray')
+    axes[1].set_title('Fixed Segmentation')
+    axes[2].imshow((warped_seg_np - fixed_seg_np), cmap='gray')
+    axes[2].set_title('Segmentation Error')
+    plt.show()
 
-    # ax.quiver(X, Y, U, V, angles='xy', scale_units='xy', scale=1, color='m')
-    # plt.title("Deformation Field")
-    # plt.show()
-    
-    # Compute Dice score
 
 
 
@@ -322,8 +343,30 @@ def save_metrics(output_path, I2, y_src, mean_dice_score):
     print(f'RMSE: {rmse_score}')
     print(f'Dice: {mean_dice_score}')
 
+    # Ensure the output directory exists
+    os.makedirs(output_path, exist_ok=True)
+
+    # If there already exists a metrics.json, append to it with the next index of the execution
+    # i.e
+    # { idx: 0, ssim: 0.5, rmse: 0.5, dice: 0.5}
+    # { idx: 1, ssim: 0.5, rmse: 0.5, dice: 0.5}
+    # ...
+    # { idx: n, ssim: 0.5, rmse: 0.5, dice: 0.5}
+
+    if os.path.exists(os.path.join(output_path, 'metrics.json')):
+        with open(os.path.join(output_path, 'metrics.json'), 'r') as f:
+            metrics_data = json.load(f)
+        idx = len(metrics_data)
+    else:
+        metrics_data = {}
+        idx = 0
+
+    metrics_data[idx] = metrics
+
     with open(os.path.join(output_path, 'metrics.json'), 'w') as f:
-        json.dump(metrics, f, indent=4)
+        json.dump(metrics_data, f, indent=4)
+
+   
 
 
 # Main execution block
@@ -382,16 +425,13 @@ def main():
         test_dataset = [data[0] for data in all_dataset[:2]]
         test_shapes = [data[1] for data in all_dataset[:2]]
 
-        #take as many random pairs as the number of epochs
-        n_epochs = args.pretrain
-
         print(f'Getting the tensor files...')
         train_tensor_dataset = get_tensor_dataset(train_dataset, device)
         test_tensor_dataset = get_tensor_dataset(test_dataset, device)
         print(f'Got the tensor files...')
 
     net, _, optimizer = initialize_network_optimizer2D(128, 128, para, device)
-    phi_inv, y_src = train_model(net, optimizer, args.pretrain, train_tensor_dataset, test_tensor_dataset)
+    phi_inv, y_src = train_model(net, optimizer, args.pretrain, train_tensor_dataset, test_tensor_dataset, 10, 0.001, device)
     
     
     evaluate_model(phi_inv, test_dataset, test_shapes,train_dataset, train_shapes, device, args)

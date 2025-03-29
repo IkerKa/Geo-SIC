@@ -90,7 +90,7 @@ def convert_to_tensor(image, device):
     return torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
 
 # Train the model
-def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output_path):
+def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, device):
     loss_total = 0
     phi_inv = None
     
@@ -99,19 +99,20 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
     ssim_per_epoch = []
     loss_per_epoch = []
     
+    I1 = I1.to(device).float()
+    I2 = I2.to(device).float()
 
-    print(f'Input image shape: {I1.shape}')
-    print(f'Target image shape: {I2.shape}')
 
     for epoch in tqdm.tqdm(range(num_epochs), desc="Training Epochs"):
         net.eval()
         optimizer.zero_grad()
+
         y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
 
         dist_loss = NCC().loss(y_src, I2)
         reg_loss = Grad(penalty='l2').loss(momentum)
         
-        loss_total = dist_loss + reg_loss
+        loss_total = 10 * dist_loss + 0.001 * reg_loss
         loss_total.backward()
         optimizer.step()
 
@@ -121,8 +122,6 @@ def train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, num_epochs, output
         
         with torch.no_grad():
             phi_inv = new_locs[0, ...]
-            final_new_locs = new_locs
-
             
 
 
@@ -145,14 +144,35 @@ def save_metrics(output_path, I2, y_src, mean_dice_score):
     ssim_score = ssim(I2.squeeze().cpu().detach().numpy(), y_src.squeeze().cpu().detach().numpy(),
                        data_range=y_src.squeeze().cpu().detach().numpy().max() - y_src.squeeze().cpu().detach().numpy().min())
     rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy())**2))
+
+    # for slice_idx in range(0, I2.shape[2], 10):
+    #     # Calculate RMSE for each slice
+    #     rmse_slice = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy()[:, :, slice_idx] - y_src.squeeze().cpu().detach().numpy()[:, :, slice_idx]) ** 2))
+    #     print(f'RMSE en slice {slice_idx}: {rmse_slice}')
+
     metrics = {'ssim': float(ssim_score), 'rmse': float(rmse_score), 'dice': float(mean_dice_score)}
 
-    print(f'SSIM: {ssim_score}')
-    print(f'RMSE: {rmse_score}')
-    print(f'Dice: {mean_dice_score}')
+    os.makedirs(output_path, exist_ok=True)
+
+    # If there already exists a metrics.json, append to it with the next index of the execution
+    # i.e
+    # { idx: 0, ssim: 0.5, rmse: 0.5, dice: 0.5}
+    # { idx: 1, ssim: 0.5, rmse: 0.5, dice: 0.5}
+    # ...
+    # { idx: n, ssim: 0.5, rmse: 0.5, dice: 0.5}
+
+    if os.path.exists(os.path.join(output_path, 'metrics.json')):
+        with open(os.path.join(output_path, 'metrics.json'), 'r') as f:
+            metrics_data = json.load(f)
+        idx = len(metrics_data)
+    else:
+        metrics_data = {}
+        idx = 0
+
+    metrics_data[idx] = metrics
 
     with open(os.path.join(output_path, 'metrics.json'), 'w') as f:
-        json.dump(metrics, f, indent=4)
+        json.dump(metrics_data, f, indent=4)
 
 
 #Function taken from NODEO
@@ -241,78 +261,46 @@ def main():
     args = parse_arguments()
     para, device = load_parameters()
 
-    _debug = False
-
-    if _debug:
-        circle_path = 'datasets/images/circle.png'
-        input_image = load_debug_data(circle_path)
-        #read image as target
-        target_image = Image.open(circle_path).convert('L')
-        transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
-        target_image = transform(target_image).unsqueeze(0).to(device)
-        target_image = target_image.squeeze(0)
-        #resize input image to 128x128
-        input_image = transforms.Resize((128, 128))(input_image)
-
-        #convert both to tensor
-        I1 = convert_to_tensor(input_image, device)
-        I2 = convert_to_tensor(target_image, device)
-        I1_seg = None
-        I2_seg = None
-
-        print(f'Input image shape: {I1.shape}')
-        print(f'Target image shape: {I2.shape}')
+    if not os.path.exists(args.output) and args.output != None:
+        os.makedirs(args.output)
 
 
-        #plot
-        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[0].set_title('Source Image (I1)')
-        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[1].set_title('Target Image (I2)')
-        plt.show()
+    target_index = 1
+    source_index = 2
 
+    (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
 
-    else:
-        #if there isnt an output directory, create it
-        if not os.path.exists(args.output) and args.output != None:
-            os.makedirs(args.output)
+    #normalize images
+    input_image = (input_image - torch.min(input_image)) / (torch.max(input_image) - torch.min(input_image))
+    target_image = (target_image - torch.min(target_image)) / (torch.max(target_image) - torch.min(target_image))
+    input_segmentation = (input_segmentation - torch.min(input_segmentation)) / (torch.max(input_segmentation) - torch.min(input_segmentation))
+    target_segmentation = (target_segmentation - torch.min(target_segmentation)) / (torch.max(target_segmentation) - torch.min(target_segmentation))
+    
 
+    #check if segmentations has same size as images
+    if input_image.shape != input_segmentation.shape:
+        raise ValueError('Input image and segmentation must have the same size')
+    
+    I1 = convert_to_tensor(input_image, device)
+    I2 = convert_to_tensor(target_image, device)
+    I1_seg = convert_to_tensor(input_segmentation, device)
+    I2_seg = convert_to_tensor(target_segmentation, device)
 
+    #we have 256 silces, we have volume of 128x128x256, we take the first 128 slices
 
-        target_index = 1
-        source_index = 2
-
-        (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
-
-        #visualize an slice from the volume
-
-
-
-        #check if segmentations has same size as images
-        if input_image.shape != input_segmentation.shape:
-            raise ValueError('Input image and segmentation must have the same size')
-        
-        I1 = convert_to_tensor(input_image, device)
-        I2 = convert_to_tensor(target_image, device)
-        I1_seg = convert_to_tensor(input_segmentation, device)
-        I2_seg = convert_to_tensor(target_segmentation, device)
-
-        print(f'Input image shape: {I1.shape}')
-        print(f'Target image shape: {I2.shape}')
-
+    # shape form: [B, C, H, W, D] # B=1, C=1, H=128, W=128, D=256
         
     net, _, optimizer = initialize_network_optimizer(128, 128, 256, para, device)
-    phi_inv, y_src = train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, args.pretrain, args.output)
+    phi_inv, y_src = train_model(net, optimizer, I1, I2, I1_seg, I2_seg, para, args.pretrain, device)
 
-    mean_dice_score = 0
+    slice_idx = 149
 
-    
+    mean_dice_score = 0 # in case we don't have segmentation
     if I1_seg is not None and I2_seg is not None:
         warped_seg_np, fixed_seg_np, mean_dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg, device)
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        slice_idx = warped_seg_np.shape[2] // 2  # Assuming shape [B, C, H, W, D]
+        # slice_idx = warped_seg_np.shape[2] // 2  # Assuming shape [B, C, H, W, D]
         warped_seg_slice = warped_seg_np[:, :, slice_idx]  # (H, W)
         fixed_seg_slice = fixed_seg_np[:, :, slice_idx]  # (H, W)
         overlay_slice = np.maximum(warped_seg_slice, fixed_seg_slice)
@@ -337,7 +325,7 @@ def main():
     #Take the grid from the same slice!
 
     # Get middle slice index (D // 2)
-    slice_idx = I1.shape[4] // 2  # Assuming shape [B, C, H, W, D]
+    # slice_idx = I1.shape[4] // 2  
 
     # Extract the same slice from each volume
     I1_slice = I1.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
@@ -361,85 +349,6 @@ def main():
     plt.title("Error Map")
     plt.show()
 
-    #TODO: plot the grid FIX IIIIT
-
-    #Deformation grid
-    # fig = plt.figure(figsize=(10, 10))
-    # ax = fig.add_subplot(111, projection='3d')
-    # interval = 2
-    # fig, ax = plt.subplots(figsize=(6, 6))
-    # interval = 2
-
-    # for row in range(0, phi_inv.shape[1], interval):
-    #     for col in range(0, phi_inv.shape[2], interval):
-    #         ax.plot(phi_inv[0, row, col, 0].cpu().detach().numpy(),  
-    #                 phi_inv[0, row, col, 1].cpu().detach().numpy(),  
-    #                 'm')
-
-    # for depth in range(0, phi_inv.shape[3], interval):
-    #     for col in range(0, phi_inv.shape[2], interval):
-    #         ax.plot(phi_inv[0, :, col, depth].cpu().detach().numpy(),  
-    #                 phi_inv[0, :, col, depth].cpu().detach().numpy(),  
-    #                 'm')
-
-    # plt.title("Diffeomorphic deformation grid")
-
-    # plt.show()
 if __name__ == '__main__':
     main()
 
-
-#--EXTRA CONTENT
-
-
-# I1_np = I1.squeeze().cpu().detach().numpy()
-# I2_np = I2.squeeze().cpu().detach().numpy()
-# y_src_np = y_src.squeeze().cpu().detach().numpy()
-
-# sitk.WriteImage(sitk.GetImageFromArray(I1_np), output_path + '/I1.nii')
-# sitk.WriteImage(sitk.GetImageFromArray(I2_np), output_path + '/I2.nii')
-# sitk.WriteImage(sitk.GetImageFromArray(y_src_np), output_path + '/y_src.nii')
-
-
-
-
-# X, Y = np.meshgrid(np.arange(phi_inv.shape[1]), np.arange(phi_inv.shape[0]))
-
-# # Extraer desplazamientos
-# U = phi_inv[:, :, 1].cpu().detach().numpy() - X  # Diferencia en X
-# V = phi_inv[:, :, 0].cpu().detach().numpy() - Y  # Diferencia en Y
-
-# # Visualizar
-# fig, ax = plt.subplots(figsize=(6, 6))
-# ax.imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')  # Imagen base
-# ax.quiver(X, Y, U, V, angles='xy', scale_units='xy', scale=1, color='m')
-
-# plt.title("Mapa de flujo de deformación")
-# plt.show()
-
-
-# I1_seg_warped = F.grid_sample(I1_seg, phi_inv.unsqueeze(0), mode='nearest')
-
-# S1_warped_np = I1_seg_warped.squeeze().cpu().detach().numpy()
-# S2_np = I2_seg.squeeze().cpu().detach().numpy()
-
-# fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-
-# axes[0].imshow(S1_warped_np, cmap='gray')
-# axes[0].set_title('Segmentación registrada (I1 → I2)')
-
-# axes[1].imshow(S2_np, cmap='gray')
-# axes[1].set_title('Segmentación real (I2)')
-
-# overlay = np.maximum(S1_warped_np, S2_np)
-# axes[2].imshow(overlay, cmap='gray')
-# axes[2].set_title('Superposición de segmentaciones')
-
-# plt.show()
-
-
-
-#-Preguntas:
-# 1. Tengo alguna manera de observar los v(x,t) en cada iteracion? para ver si al usar SVF no cambian.
-# 2. El momentum es lo que transforma la imagen I1 a I2
-# 3. Otra manera de evaluar el regsitro es usar NODEO?

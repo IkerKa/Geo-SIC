@@ -21,6 +21,9 @@ import nibabel as nib #type: ignore
 import random 
 import yaml
 import torchvision.transforms as transforms
+
+import shared_functions as sf
+
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 sys.path.append(parent_dir)
@@ -97,7 +100,7 @@ def convert_to_tensor(image, device):
     return torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
 
 # Train the model
-def train_model(net, optimizer, num_epochs, tensor_dataset):
+def train_model(net, optimizer, num_epochs, tensor_dataset, weight_dist, weight_reg,device):
     loss_total = 0
     phi_inv = None
     
@@ -118,9 +121,13 @@ def train_model(net, optimizer, num_epochs, tensor_dataset):
         I1 = tensor_dataset[idx[0]]
         I2 = tensor_dataset[idx[1]]
 
+        I1 = I1.to(device).float()
+        I2 = I2.to(device).float()
+
         y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
+
         
-        dist_loss = NCC(win=[21,21]).loss(y_src, I2)
+        dist_loss = NCC(win=[9,9]).loss(y_src, I2)
         reg_loss = Grad(penalty='l2').loss2D(momentum)
         
         loss_total = dist_loss + reg_loss
@@ -151,19 +158,27 @@ def train_model(net, optimizer, num_epochs, tensor_dataset):
     
     return phi_inv, y_src
 
-def evaluate_model(phi_inv, test_dataset, device, args):
+def evaluate_model(phi_inv, test_dataset, test_shapes, device, args):
 
 
     #Take the test images
     I1 = convert_to_tensor(test_dataset[0], device)
     I2 = convert_to_tensor(test_dataset[1], device)
 
+    #take the shapes of the images
+    I1_seg = convert_to_tensor(test_shapes[0], device)
+    I2_seg = convert_to_tensor(test_shapes[1], device)
+
+
+
     # I1 composed with phi_inv should be close to I2 -> warping I1 with phi_inv should give I2
     y_src = F.grid_sample(I1, phi_inv.unsqueeze(0), align_corners=True, mode='bilinear')
 
+    warped_seg_np, fixed_seg_np, dice_score = sf.compute_segmentation(I1_seg, phi_inv, I2_seg, device)
+
 
     if args.output:
-        save_metrics(args.output, I2, y_src, 0)
+        save_metrics(args.output, I2, y_src, dice_score)
 
     # Visualization
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -246,14 +261,19 @@ def evaluate_model(phi_inv, test_dataset, device, args):
 
     plt.show()
 
-    # fig, ax = plt.subplots(figsize=(6, 6))
-    # X, Y = np.meshgrid(np.arange(phi_inv.shape[1]), np.arange(phi_inv.shape[0]))
-    # U = phi_inv[:, :, 1].cpu().detach().numpy() - X  # Deformación en X
-    # V = phi_inv[:, :, 0].cpu().detach().numpy() - Y  # Deformación en Y
+    # Plot the absolute error of the segmentation
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(np.abs(warped_seg_np - I2_seg.squeeze().cpu().detach().numpy()), cmap='gray')
 
-    # ax.quiver(X, Y, U, V, angles='xy', scale_units='xy', scale=1, color='m')
-    # plt.title("Deformation Field")
-    # plt.show()
+    axes[0].set_title('Absolute Error Segmentation')
+    axes[1].imshow(I2_seg.squeeze().cpu().detach().numpy(), cmap='gray')
+    axes[1].set_title('Target Image Segmentation (I2)')
+    axes[2].imshow(warped_seg_np, cmap='gray')
+    axes[2].set_title('Warped Image Segmentation (y_src)')
+    plt.show()
+
+
+
 
 
 
@@ -268,8 +288,32 @@ def save_metrics(output_path, I2, y_src, mean_dice_score):
     print(f'RMSE: {rmse_score}')
     print(f'Dice: {mean_dice_score}')
 
+    # Ensure the output directory exists
+    os.makedirs(output_path, exist_ok=True)
+
+    # If there already exists a metrics.json, append to it with the next index of the execution
+    # i.e
+    # { idx: 0, ssim: 0.5, rmse: 0.5, dice: 0.5}
+    # { idx: 1, ssim: 0.5, rmse: 0.5, dice: 0.5}
+    # ...
+    # { idx: n, ssim: 0.5, rmse: 0.5, dice: 0.5}
+
+    if os.path.exists(os.path.join(output_path, 'metrics.json')):
+        with open(os.path.join(output_path, 'metrics.json'), 'r') as f:
+            metrics_data = json.load(f)
+        idx = len(metrics_data)
+    else:
+        metrics_data = {}
+        idx = 0
+
+    metrics_data[idx] = metrics
+
     with open(os.path.join(output_path, 'metrics.json'), 'w') as f:
-        json.dump(metrics, f, indent=4)
+        json.dump(metrics_data, f, indent=4)
+
+   
+
+
 
 
 # Main execution block
@@ -314,33 +358,24 @@ def main():
         if not os.path.exists(args.output) and args.output != None:
             os.makedirs(args.output)
 
-
-
-        all_dataset, all_shapes  = load_all_data()
-
-        print(f'Number of images: {len(all_dataset)}')
-        print(f'Number of shapes: {len(all_shapes)}')
-
         #--save 2 images for testing
-        test_source = 1
-        test_target = 2
+        all_dataset = load_all_data()        #all_dataset = (image, shape) 16 times
 
-        train_dataset = all_dataset[2:]
-        test_dataset = all_dataset[:2]
+        train_dataset = [data[0] for data in all_dataset[2:]]
+        train_shapes = [data[1] for data in all_dataset[2:]]
+        test_dataset = [data[0] for data in all_dataset[:2]]
+        test_shapes = [data[1] for data in all_dataset[:2]]
 
-
-        #take as many random pairs as the number of epochs
-        n_epochs = args.pretrain
 
         print(f'Getting the tensor files...')
         tensor_dataset = get_tensor_dataset(train_dataset, device)
         print(f'Got the tensor files...')
 
     net, _, optimizer = initialize_network_optimizer2D(128, 128, para, device)
-    phi_inv, y_src = train_model(net, optimizer, args.pretrain, tensor_dataset)
+    phi_inv, y_src = train_model(net, optimizer, args.pretrain, tensor_dataset, 10, 0.001, device)
     
     
-    evaluate_model(phi_inv, test_dataset, device, args)
+    evaluate_model(phi_inv, test_dataset, test_shapes, device, args)
     
     print('Done!')
 

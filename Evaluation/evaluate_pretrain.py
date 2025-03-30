@@ -199,6 +199,7 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
     # print(f'Phi_inv shape: {phi_inv.shape}')    
 
     # phi_inv = phi_inv.unsqueeze(0)
+    print(f'Phi_inv shape: {phi_inv.shape}')
     phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
     print(f'Phi_inv shape: {phi_inv.shape}')
     st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)

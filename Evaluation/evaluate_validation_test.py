@@ -264,7 +264,7 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
             dfm = Torchinterp2D(I1,phiinv_bch)
             Dist = criterion(dfm, I2)
             Reg_loss =  reg_save.sum()
-            loss_total =  Dist + weight_reg * Reg_loss
+            loss_total =  weight_dist * Dist + weight_reg * Reg_loss
             loss_total.backward(retain_graph=True)
 
         #Update the network parameters
@@ -333,7 +333,7 @@ def compute_segmentationFT(I1_seg, phi_inv, I2_seg, dev):
 
 
     return warped_seg_np, fixed_seg_np, dice
-def net_test_model(net, test_images, test_segs, device):
+def net_test_model(net, test_images, test_segs, flag, device):
     # with the trained model, test the images (phi inverted)
 
     # can be also use the net?
@@ -341,6 +341,7 @@ def net_test_model(net, test_images, test_segs, device):
     print(f'Testing {len(pairs)} pairs of images...')
 
     with torch.no_grad():
+        net.eval()
         for i, j in pairs:
             I1 = test_images[i]
             I2 = test_images[j]
@@ -350,8 +351,8 @@ def net_test_model(net, test_images, test_segs, device):
             I1 = I1.to(device).float()
             I2 = I2.to(device).float()
             net.eval()  # Modo evaluación
-            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
-            warped_seg_np, fixed_seg_np, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
+            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
             #obtain the metrics and save them
             ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
@@ -360,7 +361,7 @@ def net_test_model(net, test_images, test_segs, device):
 
             print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
 
-            save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
+            # save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
 
 def test_model(phi_inv, test_images, test_segs, device):
     # with the trained model, test the images (phi inverted)
@@ -385,10 +386,12 @@ def test_model(phi_inv, test_images, test_segs, device):
 
 def fine_tune_deformation(net, test_dataset, test_segmentations, device, criterion, num_steps=100, lr=0.01):
 
-    net.eval()
-
+    #after the inference we are going to fine tune the model with the test images
+    #we are going to use the same pairs of images as in the inference
     pairs = [(i, j) for i in range(len(test_dataset)) for j in range(len(test_dataset))]
     print(f'Fine tunning {len(pairs)} pairs of images...')
+
+    all_pairs_loss = []
 
     for i, j in pairs:
         I1 = test_dataset[i]
@@ -398,81 +401,86 @@ def fine_tune_deformation(net, test_dataset, test_segmentations, device, criteri
 
         I1 = I1.to(device).float()
         I2 = I2.to(device).float()
-        _, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
+        # Set the network to training mode
+        net.train()
+        optimizer = optim.SGD(net.parameters(), lr=lr, momentum=0.9)
 
-        # Initialize optimizer
-        phiinv = new_locs[0,...].clone().detach().requires_grad_(True).to(device)
-        # phiinv_seg = phiinv.clone().detach().requires_grad_(True).to(device)
-        optimizer = optim.Adam([phiinv], lr=lr)
-        # optimizer_seg = optim.Adam([phiinv_seg], lr=lr)
-        # phiinv_seg = phiinv_seg.permute(2,0,1).unsqueeze(0)
+        loss_per_step = []
         for step in range(num_steps):
             optimizer.zero_grad()
-            # optimizer_seg.zero_grad()
+            # Forward pass through the network
+            y_src, momentum, _, _ = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
 
             # Compute the loss for the image deformation
-            y_src = F.grid_sample(I1, phiinv.unsqueeze(0), align_corners=True, mode='bilinear')
             dist_loss = criterion(y_src, I2)
             reg_loss = Grad(penalty='l2').loss2D(momentum)
-            loss_total = dist_loss + reg_loss
-            loss_total.backward(retain_graph=True)
+            loss_total = 10 * dist_loss + 0.001 * reg_loss
 
-            # Compute the loss for the segmentation deformation
-            # st_seg = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(device)
-            # y_src_seg = st_seg(I1_seg, phiinv_seg)
-            # dist_loss_seg = criterion(y_src_seg, I2_seg)
-            # reg_loss_seg = Grad(penalty='l2').loss2D(momentum)
-            # loss_total_seg = dist_loss_seg + reg_loss_seg
-            # loss_total_seg.backward(retain_graph=True)
-
+            # Backpropagation
+            loss_total.backward()
+            loss_per_step.append(loss_total.item())
+            # Update the network parameters
             optimizer.step()
-            # optimizer_seg.step()
+
+            # # Print the loss every 10 steps
+            # if step % 10 == 0:
+            #     print(f'Step {step}/{num_steps}, Loss: {loss_total.item():.4f}')
 
 
-
-        y_src = F.grid_sample(I1, phiinv.unsqueeze(0), align_corners=True, mode='bilinear')
-        # _, _, dice_score = compute_segmentationFT(I1_seg, phiinv_seg, I2_seg, device)
-        _, _, dice_score = compute_segmentation(I1_seg, phiinv, I2_seg, device)
-
-        ssim_score = ssim(
-            y_src.squeeze().cpu().detach().numpy(),
-            I2.squeeze().cpu().detach().numpy(),
-            data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()
-        )
-
-        rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
-        mean_dice_score = np.mean(dice_score)
+        #save current loss vector
+        all_pairs_loss.append(([i, j], loss_per_step))
 
         
-        fig, axes = plt.subplots(1, 4, figsize=(24, 6))
-        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[0].set_title('Source Image (I1)')
-        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[1].set_title('Target Image (I2)')
-        axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[2].set_title('Warped Image (y_src)')
 
-        # Plotting the deformation grid for phi_inv
-        ax = axes[3]
-        interval = 2
+        #-Evaluate the fine-tuned model
+        with torch.no_grad():
+            net.eval()
+            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
+            _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
-        for row in range(0, phiinv.shape[0], interval):
-            ax.plot(phiinv[row, :, 0].cpu().detach().numpy(),
-                    phiinv[row, :, 1].cpu().detach().numpy(),
-                    'm')
+            #obtain the metrics and save them
+            ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
+            rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
+            mean_dice_score = dice_score
 
-        for col in range(0, phiinv.shape[1], interval):
-            ax.plot(phiinv[:, col, 0].cpu().detach().numpy(),
-                    phiinv[:, col, 1].cpu().detach().numpy(),
-                    'm')
+            #plot the results
+            # fig, axes = plt.subplots(1, 4, figsize=(24, 6))
+            # axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+            # axes[0].set_title('Source Image (I1)')
+            # axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
+            # axes[1].set_title('Target Image (I2)')
+            # axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
+            # axes[2].set_title('Warped Image (y_src)')
 
-        plt.show()
+            # # Plotting the deformation grid for phi_inv
+            # ax = axes[3]
+            # interval = 2
+
+            # for row in range(0, new_locs[0,...].shape[0], interval):
+            #     ax.plot(new_locs[0,...][row, :, 0].cpu().detach().numpy(),
+            #             new_locs[0,...][row, :, 1].cpu().detach().numpy(),
+            #             'm')
+
+            # for col in range(0, new_locs[0,...].shape[1], interval):
+            #     ax.plot(new_locs[0,...][:, col, 0].cpu().detach().numpy(),
+            #             new_locs[0,...][:, col, 1].cpu().detach().numpy(),
+            #             'm')
+
+            # plt.show()
+
+            
+            print(f'Fine tuning - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
 
 
-
-        print(f'Fine tuning - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
-
-
+    #plot all the losses
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for pair, loss in all_pairs_loss:
+        ax.plot(loss, label=f'Pair {pair}')
+    ax.set_xlabel('Step')
+    ax.set_ylabel('Loss')
+    ax.set_title('Loss vs Step')
+    ax.legend()
+    plt.show()
 
 # Save metrics
 def save_metrics(output_path, I2, y_src, ssim_score, rmse_score, mean_dice_score):
@@ -641,22 +649,48 @@ def main():
         # Load data
         all_dataset = load_all_data()
 
-        random.shuffle(all_dataset)
+        shuffled_dataset = random.sample(all_dataset, len(all_dataset))
 
-        num_total = len(all_dataset)
-        # num_train = int(0.8 * num_total)
-        # num_val = int(0.1 * num_total)
-        # num_test = num_total - num_train - num_val
-
+        num_total = len(shuffled_dataset)
         num_train = 12
         num_val = 2
         num_test = 2
 
+        #--Dataset preparation so we have 3 different contexts
+        # 1. No test images visible during training
+        # 2. ONE test image visible during training
+        # 3. HALF of the test images visible during training
+        # 4. ALL test images visible during training
 
-        # Split the dataset into train, validation and test sets
-        train_dataset = all_dataset[:num_train]
-        val_dataset = all_dataset[num_train:num_train + num_val]
-        test_dataset = all_dataset[num_train + num_val:]
+        context = 2  # Cambia a 2, 3 o 4 según el experimento
+
+        if context == 1:
+            train_dataset = shuffled_dataset[:num_train]
+            val_dataset = shuffled_dataset[num_train:num_train + num_val]
+            test_dataset = shuffled_dataset[num_train + num_val:]
+
+        elif context == 2:
+            train_dataset = shuffled_dataset[:num_train]
+            val_dataset = shuffled_dataset[num_train:num_train + num_val]
+            test_dataset = shuffled_dataset[num_train + num_val:]
+            train_dataset.append(test_dataset[0])  # Adding one test image
+
+        elif context == 3:
+            train_dataset = shuffled_dataset[:num_train]
+            val_dataset = shuffled_dataset[num_train:num_train + num_val]
+            test_dataset = shuffled_dataset[num_train + num_val:]
+            train_dataset.extend(test_dataset[:len(test_dataset)//2])  # Adding half of test images
+        elif context == 4:
+            train_dataset = shuffled_dataset[:num_train]
+            val_dataset = shuffled_dataset[num_train:num_train + num_val]
+            test_dataset = shuffled_dataset[num_train + num_val:]
+            train_dataset.extend(test_dataset)  # Adding all test images
+
+        print(f'Context {context}')
+        print(f'Total dataset size: {num_total}')
+        print(f'Train dataset size: {len(train_dataset)}')
+        print(f'Validation dataset size: {len(val_dataset)}')
+        print(f'Test dataset size: {len(test_dataset)}')
 
         print(f'Train dataset size: {len(train_dataset)}')
         print(f'Validation dataset size: {len(val_dataset)}')
@@ -685,25 +719,29 @@ def main():
 
         net, criterion, optimizer = initialize_network_optimizer2D(128, 128, para, device)
 
+        shooting_flag = 'LDDMM'
+
         time_init = time.time()
         # ef exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, val_every=5)
         # phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, val_every=20) #, flag = 'SVF', val_every=20)
-        phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, flag = 'SVF', val_every=20)
+        phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
+        plot_results(loss, ssim, test_images, test_seg, phi_inv, device)
         torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
         time_end = time.time()
         print(f'Training time: {time_end - time_init} seconds')
 
         #load the model in eval mode
         net.load_state_dict(torch.load(os.path.join(args.output, 'model_trained.pth')))
-        net.eval()
 
-        fine_tune_deformation(net, test_images, test_seg, device, criterion, num_steps=100, lr=0.01)
+        net_test_model(net, test_images, test_seg, shooting_flag,device)
+
+        if shooting_flag == 'SVF':
+            fine_tune_deformation(net, test_images, test_seg, device, criterion, num_steps=80, lr=0.01)
 
 
-        net_test_model(net, test_images, test_seg, device)
+        
 
-
-        plot_results(loss, ssim, test_images, test_seg, phi_inv, device)
+        
 
 
 

@@ -145,60 +145,6 @@ def validate_model(net, val_images, val_segs, device):
 
     return np.mean(ssim_scores), np.mean(rmse_scores), np.mean(dice_scores)
 
-
-def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, val_every=5):
-    loss_total = 0
-    phi_inv = None
-    ssim_per_epoch, loss_per_epoch = [], []
-    val_ssim_scores, val_rmse_scores, val_dice_scores = [], [], []
-
-    tqdm_epochs = tqdm.tqdm(range(num_epochs))
-
-    pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
-    print(f'Training with {len(pairs)} pairs of images...')
-    for epoch in tqdm_epochs:
-        tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
-        for i, j in pairs:
-            # idx = random.randint(0, len(train_dataset) - 1)
-            # I1, I2 = train_dataset[idx], train_dataset[(idx + 1) % len(train_dataset)]
-            I1, I2 = train_dataset[i], train_dataset[j]
-            # I1_seg, I2_seg = train_seg[i], train_seg[j]
-
-
-            # Per each epoch, train with all possible pairs of images? can be that done? i think it would improve
-
-            net.train()
-            optimizer.zero_grad()
-
-
-
-            I1, I2 = I1.to(device).float(), I2.to(device).float()
-            y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
-
-            dist_loss = NCC(win=[9,9]).loss(y_src, I2)
-            reg_loss = Grad(penalty='l2').loss2D(momentum)
-            loss_total = weight_dist * dist_loss + weight_reg * reg_loss
-
-            loss_total.backward()
-            optimizer.step()
-
-            loss_per_epoch.append(loss_total.item())
-            ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
-                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
-
-
-            if epoch % val_every == 0:
-                val_ssim, val_rmse, val_dice = validate_model(net, val_dataset, val_segmentations, device)
-                val_ssim_scores.append(val_ssim)
-                val_rmse_scores.append(val_rmse)
-                val_dice_scores.append(val_dice)
-                print(f'Validation - Epoch {epoch}: SSIM={val_ssim:.4f}, RMSE={val_rmse:.4f}, Dice={val_dice:.4f}')
-
-        with torch.no_grad():
-            phi_inv = new_locs[0,...]
-
-    return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
-
 def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
     loss_total = 0
     phi_inv = None
@@ -207,8 +153,11 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
 
     tqdm_epochs = tqdm.tqdm(range(num_epochs))
 
+    # #Combine train and val datasets
+    # train_dataset = train_dataset + val_dataset
     pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
     print(f'Training with {len(pairs)} pairs of images...')
+    
     for epoch in tqdm_epochs:
 
         net.train()
@@ -240,7 +189,7 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
             Reg_loss = Reg.loss2D(momentum)
 
             loss_total = weight_dist * Dist + weight_reg * Reg_loss
-            loss_total.backward(retain_graph=True)
+            loss_total.backward()
         #TODO revisar el bloque de EPD
         else:
             momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
@@ -311,28 +260,7 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
 
     return warped_seg_np, fixed_seg_np, dice
-def compute_segmentationFT(I1_seg, phi_inv, I2_seg, dev):
 
-
-    # phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
-    st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)
-    warped_seg = st_seg(I1_seg, phi_inv)
-
-    warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
-    fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
-    # dice_score = dc(warped_seg_np, fixed_seg_np)
-
-    #take the labels
-    labels = np.unique(fixed_seg_np)
-    labels = labels[labels != 0]
-
-    #compute dice score for each label
-    dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
-    dice = np.mean(dice_scores)
-
-
-
-    return warped_seg_np, fixed_seg_np, dice
 def net_test_model(net, test_images, test_segs, flag, device):
     # with the trained model, test the images (phi inverted)
 
@@ -652,9 +580,19 @@ def main():
         shuffled_dataset = random.sample(all_dataset, len(all_dataset))
 
         num_total = len(shuffled_dataset)
-        num_train = 12
-        num_val = 2
-        num_test = 2
+        # num_train = 12
+        # num_val = 2
+        # num_test = 2
+        num_train = int(num_total * 0.8)
+        # num_val = int(num_total * 0.2)
+        num_val = num_total - num_train
+
+        print(f'Total dataset size: {num_total}')
+        print(f'Train dataset size: {num_train}')
+        print(f'Validation dataset size: {num_val}')
+
+
+        #atm we exclude the test images from the training set
 
         #--Dataset preparation so we have 3 different contexts
         # 1. No test images visible during training
@@ -662,7 +600,7 @@ def main():
         # 3. HALF of the test images visible during training
         # 4. ALL test images visible during training
 
-        context = 2  # Cambia a 2, 3 o 4 según el experimento
+        context = 1  # Cambia a 2, 3 o 4 según el experimento
 
         if context == 1:
             train_dataset = shuffled_dataset[:num_train]
@@ -686,15 +624,15 @@ def main():
             test_dataset = shuffled_dataset[num_train + num_val:]
             train_dataset.extend(test_dataset)  # Adding all test images
 
-        print(f'Context {context}')
-        print(f'Total dataset size: {num_total}')
-        print(f'Train dataset size: {len(train_dataset)}')
-        print(f'Validation dataset size: {len(val_dataset)}')
-        print(f'Test dataset size: {len(test_dataset)}')
+        # print(f'Context {context}')
+        # print(f'Total dataset size: {num_total}')
+        # print(f'Train dataset size: {len(train_dataset)}')
+        # print(f'Validation dataset size: {len(val_dataset)}')
+        # print(f'Test dataset size: {len(test_dataset)}')
 
-        print(f'Train dataset size: {len(train_dataset)}')
-        print(f'Validation dataset size: {len(val_dataset)}')
-        print(f'Test dataset size: {len(test_dataset)}')
+        # print(f'Train dataset size: {len(train_dataset)}')
+        # print(f'Validation dataset size: {len(val_dataset)}')
+        # print(f'Test dataset size: {len(test_dataset)}')
 
 
 
@@ -719,13 +657,15 @@ def main():
 
         net, criterion, optimizer = initialize_network_optimizer2D(128, 128, para, device)
 
-        shooting_flag = 'LDDMM'
+        shooting_flag = 'SVF'
 
         time_init = time.time()
         # ef exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, val_every=5)
         # phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, val_every=20) #, flag = 'SVF', val_every=20)
+        
+        input("Training with all possible pairs of images...")
         phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
-        plot_results(loss, ssim, test_images, test_seg, phi_inv, device)
+        
         torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
         time_end = time.time()
         print(f'Training time: {time_end - time_init} seconds')
@@ -733,10 +673,12 @@ def main():
         #load the model in eval mode
         net.load_state_dict(torch.load(os.path.join(args.output, 'model_trained.pth')))
 
-        net_test_model(net, test_images, test_seg, shooting_flag,device)
+        # net_test_model(net, test_images, test_seg, shooting_flag, device)
+        net_test_model(net, val_images, val_seg, shooting_flag, device)
+        plot_results(loss, ssim, val_images, val_seg, phi_inv, device)
 
-        if shooting_flag == 'SVF':
-            fine_tune_deformation(net, test_images, test_seg, device, criterion, num_steps=80, lr=0.01)
+        # if shooting_flag == 'SVF':
+        #     fine_tune_deformation(net, test_images, test_seg, device, criterion, num_steps=80, lr=0.01)
 
 
         

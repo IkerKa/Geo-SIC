@@ -153,7 +153,6 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, train
 
 
         phiinv = None
-        optimizer.zero_grad()
         idx = 0
         I1, I2 = train_dataset[idx], train_dataset[(idx + 1)]
 
@@ -279,7 +278,7 @@ def main():
     train_segmentations = [I1_seg, I2_seg]
 
     time_init = time.time()
-    phi_inv, y_src, _, _ = train_model_with_validation(net, optimizer, args.pretrain, train_images, train_segmentations, 10, 0.001, device, criterion, 'SVF', val_every=10)
+    phi_inv, y_src, _, _ = train_model_with_validation(net, optimizer, args.pretrain, train_images, train_segmentations, 1, 0.001, device, criterion, 'SVF', val_every=10)
     
     torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
     time_end = time.time()

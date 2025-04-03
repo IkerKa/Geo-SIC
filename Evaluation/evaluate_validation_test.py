@@ -145,6 +145,81 @@ def validate_model(net, val_images, val_segs, device):
 
     return np.mean(ssim_scores), np.mean(rmse_scores), np.mean(dice_scores)
 
+def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
+    loss_total = 0
+    phi_inv = None
+    ssim_per_epoch, loss_per_epoch = [], []
+    val_ssim_scores, val_rmse_scores, val_dice_scores = [], [], []
+
+    tqdm_epochs = tqdm.tqdm(range(num_epochs))
+
+    # #Combine train and val datasets
+    # train_dataset = train_dataset + val_dataset
+    # pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
+    pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
+    print(f'Training with {len(pairs)} pairs of images...')
+
+
+    for epoch in tqdm_epochs:
+
+        net.train()
+        
+        # Per each epoch, train with all possible pairs of images? can be that done? i think it would improve
+        tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
+
+        pair_loss = []
+        pair_ssim = []
+
+        for pair_idx, (i,j) in enumerate(pairs):
+
+            I1 = train_dataset[i]
+            I2 = train_dataset[j]
+
+            b, c, w, h = I1.shape
+            phiinv_bch = torch.zeros(b, w, h, 2).to(device)
+            reg_save = torch.zeros(b, w, h, 2).to(device)
+
+   
+            net.train()
+
+            I1, I2 = I1.to(device).float(), I2.to(device).float()
+            y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+            if momentum.shape[1] == 128 and momentum.shape[2] == 128 and momentum.shape[3] == 2:
+                momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
+
+            if flag == 'SVF':
+                Dist = NCC().loss(I2, y_src)
+                Reg = Grad(penalty='l2')
+                Reg_loss = Reg.loss2D(momentum)
+
+                loss_total = weight_dist * Dist + weight_reg * Reg_loss
+                loss_total.backward()
+
+
+            if (pair_idx + 1) % 4 == 0 or pair_idx == len(pairs) - 1:  # Batch size = 32
+                optimizer.step()
+                optimizer.zero_grad()
+
+            # Update the loss and ssim values
+            pair_loss.append(loss_total.item())
+            pair_ssim.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
+                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+            
+            with torch.no_grad():
+                phi_inv = new_locs[0,...]
+
+        
+        mean_loss = np.mean(pair_loss)
+        mean_ssim = np.mean(pair_ssim)
+        loss_per_epoch.append(mean_loss)
+        ssim_per_epoch.append(mean_ssim)
+
+        print(f'Epoch {epoch + 1}/{num_epochs} - Loss: {mean_loss:.4f}, SSIM: {mean_ssim:.4f}')
+
+
+
+    return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
+
 def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
     loss_total = 0
     phi_inv = None
@@ -181,14 +256,14 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
 
 
         I1, I2 = I1.to(device).float(), I2.to(device).float()
-        y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
-
+        y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+        momentum = momentum.permute(0, 3, 2, 1) 
         if flag == 'SVF':
-            Dist = NCC().loss(y_src, I2)
+            Dist = NCC().loss(I2, y_src)
             Reg = Grad(penalty='l2')
             Reg_loss = Reg.loss2D(momentum)
 
-            loss_total = weight_dist * Dist + weight_reg * Reg_loss
+            loss_total = 5 * Dist + 0.05 * Reg_loss
             loss_total.backward()
         #TODO revisar el bloque de EPD
         else:
@@ -216,22 +291,24 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
             loss_total =  weight_dist * Dist + weight_reg * Reg_loss
             loss_total.backward(retain_graph=True)
 
-        #Update the network parameters
+
+        print(f'Epoch {epoch + 1}/{num_epochs} - Loss: {loss_total.item():.4f}')
+
+        # Update the network parameters
         optimizer.step()
 
         # Update the loss and ssim values
         loss_per_epoch.append(loss_total.item())
-        loss_total = 0.0
         ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                     data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
 
         #Validation step
-        if epoch % val_every == 0:
-            val_ssim, val_rmse, val_dice = validate_model(net, val_dataset, val_segmentations, device)
-            val_ssim_scores.append(val_ssim)
-            val_rmse_scores.append(val_rmse)
-            val_dice_scores.append(val_dice)
-            print(f'Validation - Epoch {epoch}: SSIM={val_ssim:.4f}, RMSE={val_rmse:.4f}, Dice={val_dice:.4f}')
+        # if epoch % val_every == 0:
+        #     val_ssim, val_rmse, val_dice = validate_model(net, val_dataset, val_segmentations, device)
+        #     val_ssim_scores.append(val_ssim)
+        #     val_rmse_scores.append(val_rmse)
+        #     val_dice_scores.append(val_dice)
+        #     print(f'Validation - Epoch {epoch}: SSIM={val_ssim:.4f}, RMSE={val_rmse:.4f}, Dice={val_dice:.4f}')
 
         with torch.no_grad():
             phi_inv = new_locs[0,...]
@@ -605,24 +682,24 @@ def main():
         if context == 1:
             train_dataset = shuffled_dataset[:num_train]
             val_dataset = shuffled_dataset[num_train:num_train + num_val]
-            test_dataset = shuffled_dataset[num_train + num_val:]
+            test_dataset = shuffled_dataset[num_train + num_val:]   #will be 0
 
-        elif context == 2:
-            train_dataset = shuffled_dataset[:num_train]
-            val_dataset = shuffled_dataset[num_train:num_train + num_val]
-            test_dataset = shuffled_dataset[num_train + num_val:]
-            train_dataset.append(test_dataset[0])  # Adding one test image
+        # elif context == 2:
+        #     train_dataset = shuffled_dataset[:num_train]
+        #     val_dataset = shuffled_dataset[num_train:num_train + num_val]
+        #     test_dataset = shuffled_dataset[num_train + num_val:]
+        #     train_dataset.append(test_dataset[0])  # Adding one test image
 
-        elif context == 3:
-            train_dataset = shuffled_dataset[:num_train]
-            val_dataset = shuffled_dataset[num_train:num_train + num_val]
-            test_dataset = shuffled_dataset[num_train + num_val:]
-            train_dataset.extend(test_dataset[:len(test_dataset)//2])  # Adding half of test images
-        elif context == 4:
-            train_dataset = shuffled_dataset[:num_train]
-            val_dataset = shuffled_dataset[num_train:num_train + num_val]
-            test_dataset = shuffled_dataset[num_train + num_val:]
-            train_dataset.extend(test_dataset)  # Adding all test images
+        # elif context == 3:
+        #     train_dataset = shuffled_dataset[:num_train]
+        #     val_dataset = shuffled_dataset[num_train:num_train + num_val]
+        #     test_dataset = shuffled_dataset[num_train + num_val:]
+        #     train_dataset.extend(test_dataset[:len(test_dataset)//2])  # Adding half of test images
+        # elif context == 4:
+        #     train_dataset = shuffled_dataset[:num_train]
+        #     val_dataset = shuffled_dataset[num_train:num_train + num_val]
+        #     test_dataset = shuffled_dataset[num_train + num_val:]
+        #     train_dataset.extend(test_dataset)  # Adding all test images
 
         # print(f'Context {context}')
         # print(f'Total dataset size: {num_total}')
@@ -633,6 +710,12 @@ def main():
         # print(f'Train dataset size: {len(train_dataset)}')
         # print(f'Validation dataset size: {len(val_dataset)}')
         # print(f'Test dataset size: {len(test_dataset)}')
+
+        print("---" * 20)
+        print(f'Train dataset size: {len(train_dataset)}')
+        print(f'Validation dataset size: {len(val_dataset)}')
+        print(f'Test dataset size: {len(test_dataset)}')
+        print("---" * 20)
 
 
 
@@ -665,7 +748,7 @@ def main():
         
         input("Training with all possible pairs of images...")
         phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
-        
+        # phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
         torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
         time_end = time.time()
         print(f'Training time: {time_end - time_init} seconds')
@@ -674,6 +757,8 @@ def main():
         net.load_state_dict(torch.load(os.path.join(args.output, 'model_trained.pth')))
 
         # net_test_model(net, test_images, test_seg, shooting_flag, device)
+
+        # WE DONT HAVE TEST ANY MORE, ONLY VALIDATION
         net_test_model(net, val_images, val_seg, shooting_flag, device)
         plot_results(loss, ssim, val_images, val_seg, phi_inv, device)
 

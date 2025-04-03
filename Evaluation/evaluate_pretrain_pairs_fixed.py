@@ -126,7 +126,8 @@ def plot_pairs(image1, image2, title1='Image 1', title2='Image 2'):
 
 
 # Train the model
-def train_model(net, optimizer, num_epochs, train_dataset, test_dataset, weight_dist, weight_reg,device):
+def train_model(net, optimizer, num_epochs, train_dataset, test_dataset, train_shapes, test_shapes, weight_dist, weight_reg,device):
+    
     loss_total = 0
     phi_inv = None
     
@@ -134,57 +135,67 @@ def train_model(net, optimizer, num_epochs, train_dataset, test_dataset, weight_
 
     ssim_per_epoch = []
     loss_per_epoch = []
+    dices_per_epoch = []
 
     I1_fixed = test_dataset[0]
+    I1_fixed_shape = test_shapes[0]
 
     phi_inv, y_src = None, None
 
     tqdm_epochs = tqdm.tqdm(range(num_epochs))
+
+    #possible pairs with respect to the fixed image
+    pairs = [(I1_fixed, I2) for I2 in train_dataset]
+    shape_pairs = [(I1_fixed_shape, I2) for I2 in train_shapes]
     for epoch in tqdm_epochs:
         tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
+        net.train()
 
-        net.eval()
-        optimizer.zero_grad()
+        pairs_loss = []
+        pairs_ssim = []
+        pairs_dice = []
 
-        #The training now is by selecting one random image from the train dataset while fixing the other image (that will be used for the training)
-        idx = random.randint(0, len(train_dataset) - 1)
-        I1 = I1_fixed
-        I2 = train_dataset[idx]
-
-        # plot_pairs(I1, I2, title1='Fixed Image', title2='Random Image')
-
-        # #wait keyboard
-        # input("Press Enter to continue...")
+        for pair_idx, (I1, I2) in enumerate(pairs):
+            I1 = I1.to(device).float()
+            I2 = I2.to(device).float()
+            I1_shape = shape_pairs[pair_idx][0].to(device).float()
+            I2_shape = shape_pairs[pair_idx][1].to(device).float()
 
 
-        I1 = I1.to(device).float()
-        I2 = I2.to(device).float()
-
-
-
-        y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
-        
-        dist_loss = NCC(win=[9,9]).loss(y_src, I2)
-        reg_loss = Grad(penalty='l2').loss2D(momentum)
-        
-        loss_total = weight_dist * dist_loss + weight_reg * reg_loss
-        loss_total.backward()
-        optimizer.step()
-
-        loss_per_epoch.append(loss_total.item())
-
-        loss_total = 0.0
-        ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
-                                   data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
-        
-        
-        with torch.no_grad():
-            phi_inv = new_locs[0, ...]
+            y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
+            momentum = momentum.permute(0, 3, 1, 2) 
+            # dist_loss = NCC(win=[9,9]).loss(I2, y_src)
+            dist_loss = MSE().loss(I2, y_src) #MSE loss
+            reg_loss = Grad(penalty='l2').loss2D(momentum)
             
+            loss_total = (1 * dist_loss +  1 * reg_loss) / 2.0
+            loss_total.backward(retain_graph=True)
+
+            #compute the DICE metric
+            _,_, dice_score = compute_segmentation(I1_shape, new_locs[0,...], I2_shape, device)
+            pairs_dice.append(dice_score)
+          
+            if (pair_idx + 1) % 2 == 0 or pair_idx == len(pairs) - 1: 
+                optimizer.step()
+                optimizer.zero_grad()
+
+            pairs_loss.append(loss_total.item())
+            pairs_ssim.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
+                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+            
+            with torch.no_grad():
+                phi_inv = new_locs[0, ...]
+
+        loss_per_epoch.append(np.mean(pairs_loss))
+        ssim_per_epoch.append(np.mean(pairs_ssim))
+        dices_per_epoch.append(np.mean(pairs_dice))
+
+        tqdm_epochs.set_postfix(loss=np.mean(pairs_loss), ssim=np.mean(pairs_ssim), dice=np.mean(pairs_dice))
+                
 
 
     #plot graph
-    fig, ax = plt.subplots(1, 2, figsize=(15, 5))
+    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
     ax[0].plot(loss_per_epoch)
     ax[0].set_title('Loss')
     ax[0].set_xlabel('Epoch')
@@ -193,6 +204,11 @@ def train_model(net, optimizer, num_epochs, train_dataset, test_dataset, weight_
     ax[1].set_title('SSIM')
     ax[1].set_xlabel('Epoch')
     ax[1].set_ylabel('SSIM')
+    ax[2].plot(dices_per_epoch)
+    ax[2].set_title('DICE')
+    ax[2].set_xlabel('Epoch')
+    ax[2].set_ylabel('DICE')
+    plt.tight_layout()
     plt.show()
     
     return phi_inv, y_src
@@ -209,8 +225,8 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
     # dice_score = dc(warped_seg_np, fixed_seg_np)
 
     #take the labels
-    labels = np.unique(fixed_seg_np) 
-    labels = labels[labels != 0] 
+    labels = np.unique(fixed_seg_np)
+    labels = labels[labels != 0]
 
     #compute dice score for each label
     dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
@@ -220,6 +236,89 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
     return warped_seg_np, fixed_seg_np, dice
 
+
+
+def net_test_model(net, test_images, test_segs, train_dataset, train_shapes, device, args):
+    # with the trained model, test the images (phi inverted)
+
+    # can be also use the net?
+    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images))]
+    print(f'Testing {len(pairs)} pairs of images...')
+    phiinvs = []
+    y_srcs = []
+
+    with torch.no_grad():
+        net.eval()
+        for i, j in pairs:
+            I1 = test_images[i].to(device).float()
+            I2 = test_images[j].to(device).float()
+            I1_seg = test_segs[i]
+            I2_seg = test_segs[j]
+
+            net.eval()  # Modo evaluación
+            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+            _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
+
+            #obtain the metrics and save them
+            ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
+            rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
+            mean_dice_score = np.mean(dice_score)
+
+            phiinvs.append(new_locs[0, ...])
+            y_srcs.append(y_src)
+
+            print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
+
+        plot_results(test_images, test_segs, phiinvs, y_srcs)
+
+
+def plot_results(test_images, test_shapes, phiinvs, y_srcs):
+    
+    #for every possible pair
+    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images))]
+    shapes_pairs = [(i, j) for i in range(len(test_shapes)) for j in range(len(test_shapes))]
+
+    for pair_idx, (pair) in enumerate(pairs):
+        I1 = test_images[pair[0]]
+        I2 = test_images[pair[1]]
+        I1_seg = test_shapes[shapes_pairs[pair_idx][0]]
+        I2_seg = test_shapes[shapes_pairs[pair_idx][1]]
+
+        phi_inv = phiinvs[pair_idx]
+        y_src = y_srcs[pair_idx]
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[0].set_title('Source Image (I1)')
+        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[1].set_title('Target Image (I2)')
+        axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[2].set_title('Registered Image (y_src)')
+        plt.show()
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        interval = 2
+
+        for row in range(0, phi_inv.shape[0], interval):
+            ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),  
+                    phi_inv[row, :, 1].cpu().detach().numpy(),  
+                    'm')
+
+        for col in range(0, phi_inv.shape[1], interval):
+            ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),  
+                    phi_inv[:, col, 1].cpu().detach().numpy(),  
+                    'm')
+
+        plt.title("Diffeomorphic deformation grid")
+
+        plt.show()
+
+
+
+
+
+
+            
 def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shapes, device, args):
 
 
@@ -235,8 +334,9 @@ def evaluate_model(phi_inv, test_dataset, test_shapes, train_dataset, train_shap
 
     warped_seg_np, fixed_seg_np, dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg, device)
 
-    if args.output:
-        save_metrics(args.output, I2, y_src, dice_score)
+    # Save metrics
+    save_metrics(args.output, I2, y_src, dice_score)
+
 
     # Visualization
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -353,8 +453,9 @@ def save_metrics(output_path, I2, y_src, mean_dice_score):
     # ...
     # { idx: n, ssim: 0.5, rmse: 0.5, dice: 0.5}
 
-    if os.path.exists(os.path.join(output_path, 'metrics.json')):
-        with open(os.path.join(output_path, 'metrics.json'), 'r') as f:
+    metrics_file = os.path.join(output_path, 'metrics.json')
+    if os.path.exists(metrics_file) and os.path.getsize(metrics_file) > 0:
+        with open(metrics_file, 'r') as f:
             metrics_data = json.load(f)
         idx = len(metrics_data)
     else:
@@ -374,70 +475,31 @@ def main():
     args = parse_arguments()
     para, device = load_parameters()
 
-    _debug = False
 
-    if _debug:
-        circle_path = 'datasets/images/circle.png'
-        input_image = load_debug_data(circle_path)
-        #read image as target
-        target_image = Image.open(circle_path).convert('L')
-        transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
-        target_image = transform(target_image).unsqueeze(0).to(device)
-        target_image = target_image.squeeze(0)
-        #resize input image to 128x128
-        input_image = transforms.Resize((128, 128))(input_image)
+    all_dataset = load_all_data()
 
-        #convert both to tensor
-        I1 = convert_to_tensor(input_image, device)
-        I2 = convert_to_tensor(target_image, device)
-        I1_seg = None
-        I2_seg = None
-
-        print(f'Input image shape: {I1.shape}')
-        print(f'Target image shape: {I2.shape}')
+    #all_dataset = (image, shape) 16 times
 
 
-        #plot
-        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[0].set_title('Source Image (I1)')
-        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[1].set_title('Target Image (I2)')
-        plt.show()
+    #--save 2 images for testing
 
+    train_dataset = [data[0] for data in all_dataset[2:]]
+    train_shapes = [data[1] for data in all_dataset[2:]]
+    test_dataset = [data[0] for data in all_dataset[:2]]
+    test_shapes = [data[1] for data in all_dataset[:2]]
 
-    else:
-        #if there isnt an output directory, create it
-        if not os.path.exists(args.output) and args.output != None:
-            os.makedirs(args.output)
-
-
-
-        all_dataset = load_all_data()
-
-        #all_dataset = (image, shape) 16 times
-
-
-        #--save 2 images for testing
-
-        train_dataset = [data[0] for data in all_dataset[2:]]
-        train_shapes = [data[1] for data in all_dataset[2:]]
-        test_dataset = [data[0] for data in all_dataset[:2]]
-        test_shapes = [data[1] for data in all_dataset[:2]]
-
-        print(f'Getting the tensor files...')
-        train_tensor_dataset = get_tensor_dataset(train_dataset, device)
-        test_tensor_dataset = get_tensor_dataset(test_dataset, device)
-        print(f'Got the tensor files...')
+    print(f'Getting the tensor files...')
+    train_tensor_dataset = get_tensor_dataset(train_dataset, device)
+    test_tensor_dataset = get_tensor_dataset(test_dataset, device)
+    train_tensor_shapes = get_tensor_dataset(train_shapes, device)
+    test_tensor_shapes = get_tensor_dataset(test_shapes, device)
+    print(f'Got the tensor files...')
 
     net, _, optimizer = initialize_network_optimizer2D(128, 128, para, device)
-    phi_inv, y_src = train_model(net, optimizer, args.pretrain, train_tensor_dataset, test_tensor_dataset, 10, 0.001, device)
-    
-    
-    evaluate_model(phi_inv, test_dataset, test_shapes,train_dataset, train_shapes, device, args)
+    phi_inv, _ = train_model(net, optimizer, args.pretrain, train_tensor_dataset, test_tensor_dataset, train_tensor_shapes, test_tensor_shapes,  10, 0.001, device)
 
-    
-    
+    net_test_model(net, test_tensor_dataset, test_tensor_shapes, train_tensor_dataset, train_shapes, device, args)
+ 
     print('Done!')
 
 if __name__ == '__main__':

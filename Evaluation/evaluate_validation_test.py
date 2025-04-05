@@ -70,8 +70,8 @@ def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
-def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149):
-    datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
+def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=140,view =2):
+    datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True, view=view)
     return datahandler.get_all_images()
 
 def get_tensor_dataset(dataset, device):
@@ -145,13 +145,10 @@ def validate_model(net, val_images, val_segs, device):
 
     return np.mean(ssim_scores), np.mean(rmse_scores), np.mean(dice_scores)
 
-def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
+def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, train_segmentations, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
     loss_total = 0
     phi_inv = None
-    ssim_per_epoch, loss_per_epoch = [], []
-    val_ssim_scores, val_rmse_scores, val_dice_scores = [], [], []
-
-    tqdm_epochs = tqdm.tqdm(range(num_epochs))
+    ssim_per_epoch, loss_per_epoch, val_dice_scores = [], [], []
 
     # #Combine train and val datasets
     # train_dataset = train_dataset + val_dataset
@@ -159,8 +156,11 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
     pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
     print(f'Training with {len(pairs)} pairs of images...')
 
-
-    for epoch in tqdm_epochs:
+    batch_size = 4
+    acc_loss = 0
+    tqdm_epochs = tqdm.tqdm(total=num_epochs, desc="Training Progress", leave=False)
+    for epoch in range(num_epochs):
+        tqdm_epochs.update(1)
 
         net.train()
         
@@ -169,41 +169,46 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
 
         pair_loss = []
         pair_ssim = []
+        pair_dice = []
 
         for pair_idx, (i,j) in enumerate(pairs):
 
             I1 = train_dataset[i]
             I2 = train_dataset[j]
 
+            I1_seg = train_segmentations[i]
+            I2_seg = train_segmentations[j]
+
             b, c, w, h = I1.shape
             phiinv_bch = torch.zeros(b, w, h, 2).to(device)
             reg_save = torch.zeros(b, w, h, 2).to(device)
 
-   
-            net.train()
-
             I1, I2 = I1.to(device).float(), I2.to(device).float()
-            y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
-            if momentum.shape[1] == 128 and momentum.shape[2] == 128 and momentum.shape[3] == 2:
-                momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
+            y_src, y_tgt, momentum, _, new_locs, new_locs_inv = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+            _,_, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
+
+            momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
 
             if flag == 'SVF':
-                Dist = NCC().loss(I2, y_src)
+                Dist = (NCC().loss(I2, y_src) + NCC().loss(y_tgt, I1))
                 Reg = Grad(penalty='l2')
                 Reg_loss = Reg.loss2D(momentum)
 
-                loss_total = weight_dist * Dist + weight_reg * Reg_loss
-                loss_total.backward()
+                loss_total = (10 * Dist + 0.001 * Reg_loss) / batch_size
+                acc_loss += loss_total
 
-
-            if (pair_idx + 1) % 4 == 0 or pair_idx == len(pairs) - 1:  # Batch size = 32
+            if (pair_idx + 1) % batch_size == 0 or pair_idx == len(pairs) - 1:
+                avg_loss = acc_loss / batch_size
+                avg_loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
+                acc_loss = 0
 
             # Update the loss and ssim values
             pair_loss.append(loss_total.item())
             pair_ssim.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                     data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+            pair_dice.append(dice_score)
             
             with torch.no_grad():
                 phi_inv = new_locs[0,...]
@@ -211,10 +216,40 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
         
         mean_loss = np.mean(pair_loss)
         mean_ssim = np.mean(pair_ssim)
+        mean_dice = np.mean(pair_dice)
         loss_per_epoch.append(mean_loss)
         ssim_per_epoch.append(mean_ssim)
+        val_dice_scores.append(mean_dice)
 
-        print(f'Epoch {epoch + 1}/{num_epochs} - Loss: {mean_loss:.4f}, SSIM: {mean_ssim:.4f}')
+
+        tqdm_epochs.set_postfix(loss=mean_loss, ssim=mean_ssim, dice=mean_dice)
+
+
+
+
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+
+    axs[0].plot(loss_per_epoch, label='Loss', color='blue')
+    axs[0].set_title('Loss over epochs')
+    axs[0].set_xlabel('Epoch')
+    axs[0].set_ylabel('Loss')
+    axs[0].legend()
+
+    axs[1].plot(ssim_per_epoch, label='SSIM', color='green')
+    axs[1].set_title('SSIM over epochs')
+    axs[1].set_xlabel('Epoch')
+    axs[1].set_ylabel('SSIM')
+    axs[1].legend()
+
+    axs[2].plot(val_dice_scores, label='Dice', color='red')
+    axs[2].set_title('Dice over epochs')
+    axs[2].set_xlabel('Epoch')
+    axs[2].set_ylabel('Dice')
+    axs[2].legend()
+
+    plt.tight_layout()
+    plt.show()
+
 
 
 
@@ -226,92 +261,90 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
     ssim_per_epoch, loss_per_epoch = [], []
     val_ssim_scores, val_rmse_scores, val_dice_scores = [], [], []
 
-    tqdm_epochs = tqdm.tqdm(range(num_epochs))
+    
 
     # #Combine train and val datasets
     # train_dataset = train_dataset + val_dataset
     pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
     print(f'Training with {len(pairs)} pairs of images...')
     
-    for epoch in tqdm_epochs:
+    with tqdm.tqdm(total=num_epochs, desc="Training Progress", leave=False) as tqdm_epochs: 
+        for epoch in range(num_epochs):
+            tqdm_epochs.update(1)
 
-        net.train()
+            tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
 
-        phiinv = None
-        optimizer.zero_grad()
+            net.train()
 
-        idx = random.randint(0, len(train_dataset) - 1)
-        I1, I2 = train_dataset[idx], train_dataset[(idx + 1) % len(train_dataset)]
+            phiinv = None
+            optimizer.zero_grad()
 
-        b, c, w, h = I1.shape
-        phiinv_bch = torch.zeros(b, w, h, 2).to(device)
-        reg_save = torch.zeros(b, w, h, 2).to(device)
+            idx = random.randint(0, len(train_dataset) - 1)
+            I1, I2 = train_dataset[idx], train_dataset[(idx + 1) % len(train_dataset)]
 
-
-        # Per each epoch, train with all possible pairs of images? can be that done? i think it would improve
-        tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
-        net.train()
-        optimizer.zero_grad()
+            b, c, w, h = I1.shape
+            phiinv_bch = torch.zeros(b, w, h, 2).to(device)
+            reg_save = torch.zeros(b, w, h, 2).to(device)
 
 
-
-        I1, I2 = I1.to(device).float(), I2.to(device).float()
-        y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
-        momentum = momentum.permute(0, 3, 2, 1) 
-        if flag == 'SVF':
-            Dist = NCC().loss(I2, y_src)
-            Reg = Grad(penalty='l2')
-            Reg_loss = Reg.loss2D(momentum)
-
-            loss_total = 5 * Dist + 0.05 * Reg_loss
-            loss_total.backward()
-        #TODO revisar el bloque de EPD
-        else:
-            momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
-
-            #MATHS things
-            img_size = 128
-            identity = get_grid2D(img_size, device).permute([0, 3, 2, 1])
-            epd = Epdiff2D(device, (16, 16), (128, 128), 5, 0.5, 2)
-            # logger.divider("Math part")
-
-            for b_id in range(b):
-                v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(128, 128, 2))
-                velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(128, 128, 2)
-                reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
-                num_steps = 12
-                v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)    # ! Bottleneck for complexity
-                phiinv = displacement.unsqueeze(0) + identity
-                phiinv_bch[b_id,...] = phiinv
-                reg_save[b_id,...] = reg_temp
-
-            dfm = Torchinterp2D(I1,phiinv_bch)
-            Dist = criterion(dfm, I2)
-            Reg_loss =  reg_save.sum()
-            loss_total =  weight_dist * Dist + weight_reg * Reg_loss
-            loss_total.backward(retain_graph=True)
+            # Per each epoch, train with all possible pairs of images? can be that done? i think it would improve
+            tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
+            net.train()
+            optimizer.zero_grad()
 
 
-        print(f'Epoch {epoch + 1}/{num_epochs} - Loss: {loss_total.item():.4f}')
 
-        # Update the network parameters
-        optimizer.step()
+            I1, I2 = I1.to(device).float(), I2.to(device).float()
+            y_src, y_target, momentum, _, new_locs, new_locs_neg = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+            momentum = momentum.permute(0, 3, 2, 1) 
+            if flag == 'SVF':
+                Dist = NCC().loss(I2, y_src) + NCC().loss(y_target, I1)
+                Reg = Grad(penalty='l1')
+                Reg_loss = Reg.loss2D(momentum)
 
-        # Update the loss and ssim values
-        loss_per_epoch.append(loss_total.item())
-        ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
-                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+                loss_total = 1 * Dist + 0.05 * Reg_loss
+                loss_total.backward()
+            #TODO revisar el bloque de EPD
+            else:
+                momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
 
-        #Validation step
-        # if epoch % val_every == 0:
-        #     val_ssim, val_rmse, val_dice = validate_model(net, val_dataset, val_segmentations, device)
-        #     val_ssim_scores.append(val_ssim)
-        #     val_rmse_scores.append(val_rmse)
-        #     val_dice_scores.append(val_dice)
-        #     print(f'Validation - Epoch {epoch}: SSIM={val_ssim:.4f}, RMSE={val_rmse:.4f}, Dice={val_dice:.4f}')
+                #MATHS things
+                img_size = 128
+                identity = get_grid2D(img_size, device).permute([0, 3, 2, 1])
+                epd = Epdiff2D(device, (16, 16), (128, 128), 5, 0.5, 2)
+                # logger.divider("Math part")
 
-        with torch.no_grad():
-            phi_inv = new_locs[0,...]
+                for b_id in range(b):
+                    v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(128, 128, 2))
+                    velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(128, 128, 2)
+                    reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
+                    num_steps = 12
+                    v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)    # ! Bottleneck for complexity
+                    phiinv = displacement.unsqueeze(0) + identity
+                    phiinv_bch[b_id,...] = phiinv
+                    reg_save[b_id,...] = reg_temp
+
+                dfm = Torchinterp2D(I1,phiinv_bch)
+                Dist = criterion(dfm, I2)
+                Reg_loss =  reg_save.sum()
+                loss_total =  weight_dist * Dist + weight_reg * Reg_loss
+                loss_total.backward(retain_graph=True)
+
+
+            tqdm_epochs.set_postfix(loss=loss_total.item(), ssim=ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
+                                        data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+
+            # Update the network parameters
+            optimizer.step()
+
+            # Update the loss and ssim values
+            loss_per_epoch.append(loss_total.item())
+            ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
+                                        data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+
+
+            with torch.no_grad():
+                phi_inv = new_locs[0,...]
 
     return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
 
@@ -342,8 +375,11 @@ def net_test_model(net, test_images, test_segs, flag, device):
     # with the trained model, test the images (phi inverted)
 
     # can be also use the net?
-    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images))]
+    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images)) if i != j]
     print(f'Testing {len(pairs)} pairs of images...')
+
+    phiinvs = []
+    y_srcs = []
 
     with torch.no_grad():
         net.eval()
@@ -356,8 +392,13 @@ def net_test_model(net, test_images, test_segs, flag, device):
             I1 = I1.to(device).float()
             I2 = I2.to(device).float()
             net.eval()  # Modo evaluación
-            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            y_src, _, _, _, new_locs, _ = net(I1, I2, registration=True, shooting=flag, return_phi=True)
             _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
+
+            phiinvs.append(new_locs[0,...])
+            y_srcs.append(y_src)
+
+
 
             #obtain the metrics and save them
             ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
@@ -367,27 +408,10 @@ def net_test_model(net, test_images, test_segs, flag, device):
             print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
 
             # save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
+        plot_results(test_images, test_segs, phiinvs, y_srcs)
+            
 
-def test_model(phi_inv, test_images, test_segs, device):
-    # with the trained model, test the images (phi inverted)
 
-    # can be also use the net?
-    I1 = test_images[0]
-    I2 = test_images[1]
-    I1_seg = test_segs[0]
-    I2_seg = test_segs[1]
-
-    y_src = F.grid_sample(I1, phi_inv.unsqueeze(0), align_corners=True, mode='bilinear')
-    warped_seg_np, fixed_seg_np, dice_score = compute_segmentation(I1_seg, phi_inv, I2_seg, device)
-
-    #obtain the metrics and save them
-    ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
-    rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
-    mean_dice_score = np.mean(dice_score)
-
-    print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
-
-    save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
 
 def fine_tune_deformation(net, test_dataset, test_segmentations, device, criterion, num_steps=100, lr=0.01):
 
@@ -520,86 +544,54 @@ def save_metrics(output_path, I2, y_src, ssim_score, rmse_score, mean_dice_score
         json.dump(metrics_data, f, indent=4)
 
 
-def plot_results(loss, ssim, test_images, test_segs, phi_inv, device):
-    #1st plot: loss vs epoch
-    plt.figure(figsize=(10, 5))
-    plt.plot(loss, label='Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Loss vs Epoch')
-    plt.legend()
-    # plt.savefig('output/loss_vs_epoch.png')
-    plt.show()
 
-    #2nd plot: ssim vs epoch
-    plt.figure(figsize=(10, 5))
-    plt.plot(ssim, label='SSIM')
-    plt.xlabel('Epoch')
-    plt.ylabel('SSIM')
-    plt.title('SSIM vs Epoch')
-    plt.legend()
+def plot_results(test_images, test_shapes, phiinvs, y_srcs):
+    
+    #for every possible pair
+    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images)) if i != j]
+    shapes_pairs = [(i, j) for i in range(len(test_shapes)) for j in range(len(test_shapes)) if i != j]
 
-    # plt.savefig('output/ssim_vs_epoch.png')
-    plt.show()
+    for pair_idx, (pair) in enumerate(pairs):
+        #if the I1 == I2, skip it
+        if pair[0] == pair[1]:
+            continue
 
-    #3rd plot: target vs warped vs phi_inv
-    I1 = test_images[0]
-    I2 = test_images[1]
+        I1 = test_images[pair[0]]
+        I2 = test_images[pair[1]]
+        I1_seg = test_shapes[shapes_pairs[pair_idx][0]]
+        I2_seg = test_shapes[shapes_pairs[pair_idx][1]]
 
-    y_src = F.grid_sample(I1, phi_inv.unsqueeze(0), align_corners=True, mode='bilinear')
-    I2 = I2.squeeze().cpu().detach().numpy()
-    I1 = I1.squeeze().cpu().detach().numpy()
-    y_src = y_src.squeeze().cpu().detach().numpy()
+        phi_inv = phiinvs[pair_idx]
+        y_src = y_srcs[pair_idx]
 
-    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
-    axes[0].imshow(I1, cmap='gray')
-    axes[0].set_title('Source Image (I1)')
-    axes[1].imshow(I2, cmap='gray')
-    axes[1].set_title('Target Image (I2)')
-    axes[2].imshow(y_src, cmap='gray')
-    axes[2].set_title('Warped Image (y_src)')
+        fig, axes = plt.subplots(1, 5, figsize=(25, 5))
+        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[0].set_title('Source Image (I1)')
+        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[1].set_title('Target Image (I2)')
+        axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[2].set_title('Registered Image (y_src)')
+        error = I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()
+        axes[3].imshow(error, cmap='gray')
+        axes[3].set_title('Error (I2 - y_src)')
 
-    # Plotting the deformation grid for phi_inv
-    ax = axes[3]
-    interval = 2
+        # Plotting the deformation grid for phi_inv
+        ax = axes[4]
+        interval = 2
 
-    for row in range(0, phi_inv.shape[0], interval):
-        ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),
+        for row in range(0, phi_inv.shape[0], interval):
+            ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),
                 phi_inv[row, :, 1].cpu().detach().numpy(),
                 'm')
 
-    for col in range(0, phi_inv.shape[1], interval):
-        ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),
+        for col in range(0, phi_inv.shape[1], interval):
+            ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),
                 phi_inv[:, col, 1].cpu().detach().numpy(),
                 'm')
 
-    plt.show()
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    ax.imshow(I1, cmap='gray')
-
-    H, W = I1.shape
-
-    #convert phi from -1,1 to image
-    phi_inv_np = phi_inv.cpu().detach().numpy()
-    phi_inv_x = (phi_inv_np[:, :, 0] + 1) * (W - 1) / 2  # X coordinates
-    phi_inv_y = (phi_inv_np[:, :, 1] + 1) * (H - 1) / 2  # Y coordinates
-
-    #transpose the phi_inv
-    phi_inv_x = np.transpose(phi_inv_x)
-    phi_inv_y = np.transpose(phi_inv_y)
-
-
-
-    interval = 2
-    for row in range(0, H, interval):
-        ax.plot(phi_inv_x[row, :], phi_inv_y[row, :], 'm')
-    for col in range(0, W, interval):
-        ax.plot(phi_inv_x[:, col], phi_inv_y[:, col], 'm')
-
-    plt.title("Diffeomorphic deformation grid overlaid on Source Image")
-    plt.show()
+        ax.set_title("Diffeomorphic deformation grid")
+        plt.tight_layout()
+        plt.show()
 
 
 
@@ -654,15 +646,16 @@ def main():
         # Load data
         all_dataset = load_all_data()
 
-        shuffled_dataset = random.sample(all_dataset, len(all_dataset))
+        # shuffled_dataset = random.sample(all_dataset, len(all_dataset))
+        shuffled_dataset = all_dataset.copy()
 
         num_total = len(shuffled_dataset)
-        # num_train = 12
-        # num_val = 2
+        num_train = 14
+        num_val = 2
         # num_test = 2
-        num_train = int(num_total * 0.8)
+        # num_train = int(num_total * 0.8)
         # num_val = int(num_total * 0.2)
-        num_val = num_total - num_train
+        # num_val = num_total - num_train
 
         print(f'Total dataset size: {num_total}')
         print(f'Train dataset size: {num_train}')
@@ -677,39 +670,25 @@ def main():
         # 3. HALF of the test images visible during training
         # 4. ALL test images visible during training
 
-        context = 1  # Cambia a 2, 3 o 4 según el experimento
+        context = 2  # Cambia a 2, 3 o 4 según el experimento
 
         if context == 1:
             train_dataset = shuffled_dataset[:num_train]
             val_dataset = shuffled_dataset[num_train:num_train + num_val]
             test_dataset = shuffled_dataset[num_train + num_val:]   #will be 0
 
-        # elif context == 2:
-        #     train_dataset = shuffled_dataset[:num_train]
-        #     val_dataset = shuffled_dataset[num_train:num_train + num_val]
-        #     test_dataset = shuffled_dataset[num_train + num_val:]
-        #     train_dataset.append(test_dataset[0])  # Adding one test image
+        elif context == 2:
+            train_dataset = shuffled_dataset[:num_train]
+            val_dataset = shuffled_dataset[num_train:num_train + num_val]
+            #add one validation image to the training set
+            train_dataset.append(val_dataset[0])
 
-        # elif context == 3:
-        #     train_dataset = shuffled_dataset[:num_train]
-        #     val_dataset = shuffled_dataset[num_train:num_train + num_val]
-        #     test_dataset = shuffled_dataset[num_train + num_val:]
-        #     train_dataset.extend(test_dataset[:len(test_dataset)//2])  # Adding half of test images
-        # elif context == 4:
-        #     train_dataset = shuffled_dataset[:num_train]
-        #     val_dataset = shuffled_dataset[num_train:num_train + num_val]
-        #     test_dataset = shuffled_dataset[num_train + num_val:]
-        #     train_dataset.extend(test_dataset)  # Adding all test images
+            #test is empty
+            test_dataset = shuffled_dataset[num_train + num_val:]
+            
 
-        # print(f'Context {context}')
-        # print(f'Total dataset size: {num_total}')
-        # print(f'Train dataset size: {len(train_dataset)}')
-        # print(f'Validation dataset size: {len(val_dataset)}')
-        # print(f'Test dataset size: {len(test_dataset)}')
 
-        # print(f'Train dataset size: {len(train_dataset)}')
-        # print(f'Validation dataset size: {len(val_dataset)}')
-        # print(f'Test dataset size: {len(test_dataset)}')
+
 
         print("---" * 20)
         print(f'Train dataset size: {len(train_dataset)}')
@@ -738,6 +717,15 @@ def main():
         test_images = get_tensor_dataset(test_images, device)
         test_seg = get_tensor_dataset(test_seg, device)
 
+        #plot an image to see if it works
+        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+        axes[0].imshow(train_images[0].squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[0].set_title('Train Image (I1)')
+        axes[1].imshow(train_seg[0].squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[1].set_title('Train Segmentation (I1)')
+        plt.show()
+
+
         net, criterion, optimizer = initialize_network_optimizer2D(128, 128, para, device)
 
         shooting_flag = 'SVF'
@@ -747,8 +735,8 @@ def main():
         # phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, val_every=20) #, flag = 'SVF', val_every=20)
         
         input("Training with all possible pairs of images...")
-        phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
-        # phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
+        # phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
+        phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, train_seg, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
         torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
         time_end = time.time()
         print(f'Training time: {time_end - time_init} seconds')
@@ -760,7 +748,6 @@ def main():
 
         # WE DONT HAVE TEST ANY MORE, ONLY VALIDATION
         net_test_model(net, val_images, val_seg, shooting_flag, device)
-        plot_results(loss, ssim, val_images, val_seg, phi_inv, device)
 
         # if shooting_flag == 'SVF':
         #     fine_tune_deformation(net, test_images, test_seg, device, criterion, num_steps=80, lr=0.01)

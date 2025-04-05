@@ -307,7 +307,7 @@ class NiftiDataset(Dataset):
     """
     Dataset to load 3D NIfTI images and convert them to 2D tensors.
     """
-    def __init__(self, directory, size=None, transform=None, slice_index=None, seg=None):
+    def __init__(self, directory, size=None, transform=None, slice_index=None, seg=None, view = 3):
         """
         Args:
             directory (str): Path to the directory containing the NIfTI files.
@@ -319,6 +319,7 @@ class NiftiDataset(Dataset):
         self.transform = transform
         self.slice_index = slice_index
         self.seg = seg
+        self.view = view
 
         # Obtener los archivos (se asume que no son segmentaciones)
         all_files = [f for f in os.listdir(directory) if f.endswith('.nii.gz') 
@@ -334,55 +335,6 @@ class NiftiDataset(Dataset):
     def __len__(self):
         return len(self.images)
     
-    # DESCOMENTAR SI TENEMOS FUNCION PARA LEER .NII (TODO)
-    # def __getitem__(self, idx):
-    #     # Obtener la imagen (ya sea como array o a partir de la imagen cargada)
-    #     image_data = self.images[idx]
-    #     if isinstance(image_data, nib.Nifti1Image):
-    #         image_data = image_data.get_fdata()
-        
-    #     # Take or calculate the slice index
-    #     z_idx = self.slice_index if self.slice_index is not None else image_data.shape[2] // 2
-    #     image_slice = image_data[:, :, z_idx]
-
-    #     # Resize the image if needed
-    #     if self.size is not None:
-    #         image_slice = cv2.resize(image_slice, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
-
-    #     # Convertir la imagen a tensor: [C, H, W] y normalizar a [0,1]
-        
-    #     image_tensor = torch.from_numpy(image_slice).unsqueeze(0)
-    #     if self.transform:
-    #         image_tensor = self.transform(image_tensor)
-    #     return image_tensor
-
-    #Esto sigue el metodo tradicional de cargar la imagen (convertir a 2D con png)
-    # def __getitem__(self, idx):
-    #     # Cargar la imagen NIfTI y obtener el array de datos
-    #     img = self.images[idx]
-    #     data = img.get_fdata()
-
-    #     z_idx = self.slice_index if self.slice_index is not None else data.shape[2] // 2
-    #     slice_img = data[:, :, z_idx]
-
-    #     slice_norm = (slice_img - np.min(slice_img)) / (np.max(slice_img) - np.min(slice_img) + 1e-8)
-    #     slice_uint8 = (slice_norm * 255).astype(np.uint8)
-
-    #     pil_img = Image.fromarray(slice_uint8)
-    #     pil_img = ImageOps.grayscale(pil_img)
-
-    #     if self.size is not None:
-    #         pil_img = pil_img.resize((self.size, self.size))
-
-    #     #[0,1]
-    #     image_np = np.array(pil_img, dtype=np.float32) / 255.0
-
-    #     #[C, H, W]
-    #     image_tensor = torch.from_numpy(image_np).unsqueeze(0)
-
-    #     if self.transform:
-    #         image_tensor = self.transform(image_tensor)
-    #     return image_tensor
     
     #COMBINANDO AMBOS METODOS
     def __getitem__(self, idx):
@@ -392,7 +344,12 @@ class NiftiDataset(Dataset):
 
         # Obtener el slice
         z_idx = self.slice_index if self.slice_index is not None else image_data.shape[2] // 2
-        image_slice = image_data[:, :, z_idx]
+        if self.view == 3:
+            image_slice = image_data[:, :, z_idx]
+        elif self.view == 2:
+            image_slice = image_data[:, z_idx, :]
+        elif self.view == 1:
+            image_slice = image_data[z_idx, :, :]
 
         # Redimensionar si es necesario
         if self.size is not None:
@@ -414,7 +371,14 @@ class NiftiDataset(Dataset):
             if isinstance(seg_data, nib.Nifti1Image):
                 seg_data = seg_data.get_fdata()
 
-            seg_slice = seg_data[:, :, z_idx]
+            if self.view == 3:
+                seg_slice = seg_data[:, :, z_idx]
+            elif self.view == 2:
+                seg_slice = seg_data[:, z_idx, :]
+            elif self.view == 1:
+                seg_slice = seg_data[z_idx, :, :]
+
+
             seg_slice = cv2.resize(seg_slice, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
 
             seg_slice = seg_slice.astype(np.uint8)

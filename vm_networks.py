@@ -192,12 +192,6 @@ class Unet(nn.Module):
             if not self.half_res or level < (self.nb_levels - 2):
                 x = self.upsampling[level](x)
                 x = torch.cat([x, x_history.pop()], dim=1)
-                # Ensure dimensions are valid before interpolation
-                #determine interpolation method 
-                # target_size = x_history[-1].shape[2:]
-                # if all(dim > 0 for dim in target_size):
-                #     x = F.interpolate(x, size=target_size, mode="trilinear", align_corners=True)
-                # print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
                 
 
         # remaining convs at full resolution
@@ -348,17 +342,12 @@ class UnetDense(LoadableModel):
         else:
             pos_flow = self.fullsize(pos_flow)
             neg_flow = self.fullsize(neg_flow) if self.bidir else None
+            
         # warp image with flow field
-
-        # if return_phi:
-        #     y_source, new_loc = self.transformer(source, pos_flow, return_phi=return_phi)
-        # else:
         r_phi = return_phi
 
         if return_phi:
             y_source, new_loc = self.transformer(source, pos_flow, return_phi=r_phi)
-            if self.bidir:
-                y_target, new_loc_neg = self.transformer(target, neg_flow, return_phi=r_phi)
         else:
             y_source = self.transformer(source, pos_flow, return_phi=r_phi)
 
@@ -367,8 +356,6 @@ class UnetDense(LoadableModel):
             return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow)
         else:
             if return_phi:
-                if self.bidir:
-                    return y_source, y_target,  pos_flow, latent_f, new_loc, new_loc_neg
                 return y_source, pos_flow, latent_f, new_loc
             else:
                 return y_source, pos_flow, latent_f # Deformed image (if svf = true), transformation field, and latent features

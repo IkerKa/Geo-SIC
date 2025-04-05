@@ -21,11 +21,12 @@ import nibabel as nib #type: ignore
 import random
 import yaml
 import torchvision.transforms as transforms
+import torchvision.transforms as T
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 sys.path.append(parent_dir)
 
-from losses import NCC, MSE, Grad
+from losses import NCC, MSE, Grad, DiceLoss
 from networks import UnetDense
 from SitkDataSet import SitkDataset as SData
 from uEpdiff import Epdiff
@@ -70,7 +71,7 @@ def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
-def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=140,view =2):
+def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=165,view =2):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True, view=view)
     return datahandler.get_all_images()
 
@@ -114,6 +115,15 @@ def load_debug_data(image_datadir = 'datasets/images/circle.png'):
 def convert_to_tensor(image, device):
     return torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
 
+#calculate DICE loss
+def dice_loss(I1_seg, I2_seg, phi_inv, device):
+    phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
+    I1_seg_warped = F.grid_sample(I1_seg.float(), phi_inv, mode='nearest', align_corners=True)
+    dice_loss_fn = DiceLoss()
+    seg_loss = dice_loss_fn(I1_seg_warped, I2_seg)
+
+    return seg_loss
+
 def validate_model(net, val_images, val_segs, device):
     net.eval()  # Modo evaluación
     ssim_scores, rmse_scores, dice_scores = [], [], []
@@ -156,7 +166,7 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
     pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
     print(f'Training with {len(pairs)} pairs of images...')
 
-    batch_size = 4
+    batch_size = 2
     acc_loss = 0
     tqdm_epochs = tqdm.tqdm(total=num_epochs, desc="Training Progress", leave=False)
     for epoch in range(num_epochs):
@@ -184,17 +194,20 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
             reg_save = torch.zeros(b, w, h, 2).to(device)
 
             I1, I2 = I1.to(device).float(), I2.to(device).float()
-            y_src, y_tgt, momentum, _, new_locs, new_locs_inv = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
-            _,_, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
+            y_src, y_tgt, momentum, momentum_neg,  _, new_locs, new_locs_inv = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+            warped_img,_, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
-            momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
+            # momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
+            # momentum_neg = momentum_neg.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
+
 
             if flag == 'SVF':
                 Dist = (NCC().loss(I2, y_src) + NCC().loss(y_tgt, I1))
                 Reg = Grad(penalty='l2')
                 Reg_loss = Reg.loss2D(momentum)
+                # Dice_loss = DiceLoss(device=device)
 
-                loss_total = (10 * Dist + 0.001 * Reg_loss) / batch_size
+                loss_total = (1 * Dist + 0.01 * Reg_loss) / batch_size
                 acc_loss += loss_total
 
             if (pair_idx + 1) % batch_size == 0 or pair_idx == len(pairs) - 1:
@@ -249,8 +262,6 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
 
     plt.tight_layout()
     plt.show()
-
-
 
 
     return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
@@ -350,11 +361,9 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
 
 def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
-
     phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
-    st_seg = SpatialTransformer(size=I1_seg.shape[2:],  mode='nearest').to(dev)
-    warped_seg = st_seg(I1_seg, phi_inv)
-
+    spat_trans = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
+    warped_seg = spat_trans(I1_seg, phi_inv)
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
     fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
     # dice_score = dc(warped_seg_np, fixed_seg_np)
@@ -366,8 +375,6 @@ def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
     #compute dice score for each label
     dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
     dice = np.mean(dice_scores)
-
-
 
     return warped_seg_np, fixed_seg_np, dice
 
@@ -381,6 +388,10 @@ def net_test_model(net, test_images, test_segs, flag, device):
     phiinvs = []
     y_srcs = []
 
+    ssims = []
+    rmse = []
+    dices = []
+
     with torch.no_grad():
         net.eval()
         for i, j in pairs:
@@ -392,7 +403,7 @@ def net_test_model(net, test_images, test_segs, flag, device):
             I1 = I1.to(device).float()
             I2 = I2.to(device).float()
             net.eval()  # Modo evaluación
-            y_src, _, _, _, new_locs, _ = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            y_src, _, _, _, _, new_locs, _ = net(I1, I2, registration=True, shooting=flag, return_phi=True)
             _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
             phiinvs.append(new_locs[0,...])
@@ -405,10 +416,18 @@ def net_test_model(net, test_images, test_segs, flag, device):
             rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
             mean_dice_score = np.mean(dice_score)
 
-            print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
+            ssims.append(ssim_score)
+            rmse.append(rmse_score)
+            dices.append(mean_dice_score)
+
+            # print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
 
             # save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
-        plot_results(test_images, test_segs, phiinvs, y_srcs)
+
+        #print the average
+        print(f'Average - SSIM: {np.mean(ssims):.4f}, RMSE: {np.mean(rmse):.4f}, Dice: {np.mean(dices):.4f}')
+        
+        # plot_results(test_images, test_segs, phiinvs, y_srcs)
             
 
 
@@ -646,20 +665,42 @@ def main():
         # Load data
         all_dataset = load_all_data()
 
+        augment = T.Compose([
+                    T.RandomAffine(degrees=5, translate=(0.02, 0.02), scale=(0.95, 1.05)),
+        ])
+
+        # # Extend the dataset with augmented data
+        # augmented_dataset = []
+
+        # # Apply the augmentations to the images and segmentations
+        # for i in range(len(all_dataset)):
+        #     print(f'Augmenting image {i}')
+        #     original_image, original_segmentation = all_dataset[i]
+            
+        #     # Apply augmentation once to generate a slightly modified sample
+        #     augmented_image = augment(original_image)
+        #     augmented_segmentation = augment(original_segmentation)
+        #     augmented_dataset.append((augmented_image, augmented_segmentation))
+
+            
+
+        # # Combine the original dataset with the augmented dataset
+        # all_dataset.extend(augmented_dataset)
+
+        # print(f'Original dataset size: {len(all_dataset) - len(augmented_dataset)}')
+        # print(f'Augmented dataset size: {len(augmented_dataset)}')
+
+        
+
         # shuffled_dataset = random.sample(all_dataset, len(all_dataset))
         shuffled_dataset = all_dataset.copy()
 
         num_total = len(shuffled_dataset)
-        num_train = 14
-        num_val = 2
-        # num_test = 2
-        # num_train = int(num_total * 0.8)
-        # num_val = int(num_total * 0.2)
-        # num_val = num_total - num_train
+        num_train = int(num_total * 0.8)  # 80% for training
+        num_val = num_total - num_train  # Remaining for validation
 
-        print(f'Total dataset size: {num_total}')
-        print(f'Train dataset size: {num_train}')
-        print(f'Validation dataset size: {num_val}')
+        # Ensure no leftover by checking the sum matches the total
+        assert num_train + num_val == num_total, "The split sizes do not match the total dataset size."
 
 
         #atm we exclude the test images from the training set
@@ -670,7 +711,7 @@ def main():
         # 3. HALF of the test images visible during training
         # 4. ALL test images visible during training
 
-        context = 2  # Cambia a 2, 3 o 4 según el experimento
+        context = 1  # Cambia a 2, 3 o 4 según el experimento
 
         if context == 1:
             train_dataset = shuffled_dataset[:num_train]
@@ -680,22 +721,27 @@ def main():
         elif context == 2:
             train_dataset = shuffled_dataset[:num_train]
             val_dataset = shuffled_dataset[num_train:num_train + num_val]
-            #add one validation image to the training set
+            #add one image and segmentation pair to the train dataset
             train_dataset.append(val_dataset[0])
-
             #test is empty
             test_dataset = shuffled_dataset[num_train + num_val:]
+
+        elif context == 3:
+            #All of the test images are visible during training
+            train_dataset = shuffled_dataset[:num_train]
+            val_dataset = shuffled_dataset[num_train:num_train + num_val]
+            #add all images and segmentations to the train dataset
+            train_dataset.extend(val_dataset)
+            #test is empty
+            test_dataset = shuffled_dataset[num_train + num_val:]
+
             
-
-
-
 
         print("---" * 20)
         print(f'Train dataset size: {len(train_dataset)}')
         print(f'Validation dataset size: {len(val_dataset)}')
         print(f'Test dataset size: {len(test_dataset)}')
         print("---" * 20)
-
 
 
         train_images = [data[0] for data in train_dataset]
@@ -761,4 +807,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

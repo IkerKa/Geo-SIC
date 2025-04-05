@@ -348,15 +348,12 @@ class UnetDense(LoadableModel):
         else:
             pos_flow = self.fullsize(pos_flow)
             neg_flow = self.fullsize(neg_flow) if self.bidir else None
-        # warp image with flow field
 
-        # if return_phi:
-        #     y_source, new_loc = self.transformer(source, pos_flow, return_phi=return_phi)
-        # else:
         r_phi = return_phi
 
         if return_phi:
             y_source, new_loc = self.transformer(source, pos_flow, return_phi=r_phi)
+
             if self.bidir:
                 y_target, new_loc_neg = self.transformer(target, neg_flow, return_phi=r_phi)
         else:
@@ -368,7 +365,8 @@ class UnetDense(LoadableModel):
         else:
             if return_phi:
                 if self.bidir:
-                    return y_source, y_target,  pos_flow, latent_f, new_loc, new_loc_neg
+                    return y_source, y_target,  pos_flow, neg_flow, latent_f, new_loc, new_loc_neg
+                
                 return y_source, pos_flow, latent_f, new_loc
             else:
                 return y_source, pos_flow, latent_f # Deformed image (if svf = true), transformation field, and latent features

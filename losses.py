@@ -136,3 +136,21 @@ class Grad:
         if self.loss_mult is not None:
             grad *= self.loss_mult
         return grad
+    
+class DiceLoss(torch.nn.Module):
+    def __init__(self, smooth=1e-5, device=None):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+        self.device = device
+
+    def forward(self, inputs, targets):
+        if not isinstance(inputs, torch.Tensor):
+            inputs = torch.tensor(inputs, dtype=torch.float32, device=self.device)
+
+        inputs = torch.sigmoid(inputs)
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+
+        intersection = (inputs * targets).sum()
+        dice = (2. * intersection + self.smooth) / (inputs.sum() + targets.sum() + self.smooth)
+        return 1 - dice

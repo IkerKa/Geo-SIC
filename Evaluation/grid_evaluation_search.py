@@ -71,7 +71,7 @@ def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
-def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=115,view=2):
+def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=135,view=2):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True, view=view)
     return datahandler.get_all_images()
 

@@ -136,61 +136,87 @@ def validate_model(net, val_images, val_segs, device):
 def train_model_with_validation(net, optimizer, num_epochs, train_dataset, train_seg, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
     loss_total = 0
     phi_inv = None
-    ssim_per_epoch, loss_per_epoch = [], []
-    val_ssim_scores, val_rmse_scores, val_dice_scores = [], [], []
+    ssim_per_epoch, loss_per_epoch, dice_per_epoch = [], [], []
 
-    tqdm_epochs = tqdm.tqdm(range(num_epochs))
 
     # #Combine train and val datasets
     # train_dataset = train_dataset + val_dataset
-    pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
-    print(f'Training with {len(pairs)} pairs of images...')
-    
-    for epoch in tqdm_epochs:
-
+    pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))] 
+    with tqdm.tqdm(total=num_epochs, desc='Training', unit='epoch', leave=True) as tqdm_epochs:
         net.train()
-        optimizer.zero_grad()
+        for epoch in range(num_epochs):
+            tqdm_epochs.update(1)
+   
+            optimizer.zero_grad()
+            phiinv = None
+            # Get two random indices
+            idx, idx2 = random.sample(range(len(train_dataset)), 2)
+            tqdm_epochs.set_description(f'Training epoch {epoch} with pair {idx} and {idx2}')
 
+            ## TAKE THE IMAGES AND SEGMENTATIONS ##
+            I1, I2 = train_dataset[idx], train_dataset[(idx + 1) % len(train_dataset)]
+            I1_seg, I2_seg = train_seg[idx], train_seg[(idx + 1) % len(train_seg)]
+            I1, I2 = I1.to(device).float(), I2.to(device).float()
 
-        phiinv = None
-        idx = 0
-        I1, I2 = train_dataset[idx], train_dataset[(idx + 1)]
+            
+            y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            _,_, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
-        # Per each epoch, train with all possible pairs of images? can be that done? i think it would improve
-        tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
-       
+            if flag == 'SVF':
+                Dist = NCC().loss(I2, y_src)  # Compute the NCC loss
+                Reg = Grad(penalty='l2')
+                Reg_loss = Reg.loss(momentum)
 
+                loss_total = weight_dist * Dist + weight_reg * Reg_loss
+                loss_total.backward()
+            
+            #Update the network parameters
+            optimizer.step()
 
-        I1, I2 = I1.to(device).float(), I2.to(device).float()
-        y_src, momentum, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            # Update the loss and ssim values
+            loss_per_epoch.append(loss_total.item())
+            loss_total = 0.0
+            ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
+                                        data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+            
+            dice_per_epoch.append(dice_score)
 
-        if flag == 'SVF':
-            Dist = NCC().loss(y_src, I2)
-            Reg = Grad(penalty='l2')
-            Reg_loss = Reg.loss(momentum)
+            tqdm_epochs.set_postfix(loss=loss_per_epoch[-1], ssim=ssim_per_epoch[-1], dice=dice_score)
 
-            loss_total = weight_dist * Dist + weight_reg * Reg_loss
-            loss_total.backward()
-        
-        #Update the network parameters
-        optimizer.step()
+            with torch.no_grad():
+                phi_inv = new_locs[0,...]
 
-        # Update the loss and ssim values
-        loss_per_epoch.append(loss_total.item())
-        loss_total = 0.0
-        ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
-                                    data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+     #plot the metrics
+    # Plot Loss
+    # Plot Loss
+    plt.figure(figsize=(10, 5))
+    plt.plot(loss_per_epoch, label='Loss', color='blue')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.legend()
+    plt.grid()
+    plt.show()
 
-        #Validation step
-        # if epoch % val_every == 0:
-        #     val_ssim, val_rmse, val_dice = validate_model(net, train_dataset, train_seg, device)
-        #     val_ssim_scores.append(val_ssim)
-        #     val_rmse_scores.append(val_rmse)
-        #     val_dice_scores.append(val_dice)
-        #     print(f'Validation - Epoch {epoch}: SSIM={val_ssim:.4f}, RMSE={val_rmse:.4f}, Dice={val_dice:.4f}')
+    # Plot SSIM
+    plt.figure(figsize=(10, 5))
+    plt.plot(ssim_per_epoch, label='SSIM', color='green')
+    plt.xlabel('Epochs')
+    plt.ylabel('SSIM')
+    plt.title('Training SSIM Over Epochs')
+    plt.legend()
+    plt.grid()
+    plt.show()
 
-        with torch.no_grad():
-            phi_inv = new_locs[0,...]
+    # Plot Dice
+    plt.figure(figsize=(10, 5))
+    plt.plot(dice_per_epoch, label='Dice', color='red')
+    plt.xlabel('Epochs')
+    plt.ylabel('Dice')
+    plt.title('Training Dice Over Epochs')
+    plt.legend()
+    plt.grid()
+    plt.show()
 
     return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
 
@@ -220,9 +246,11 @@ def net_test_model(net, test_images, test_segs, flag, device):
     # with the trained model, test the images (phi inverted)
 
     # can be also use the net?
-    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images))]
+    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images)) if i != j]
     print(f'Testing {len(pairs)} pairs of images...')
 
+    #for-loop for every pair of images
+    rmses, ssims, dices = [], [], []
     with torch.no_grad():
         net.eval()
         for i, j in pairs:
@@ -233,7 +261,6 @@ def net_test_model(net, test_images, test_segs, flag, device):
 
             I1 = I1.to(device).float()
             I2 = I2.to(device).float()
-            net.eval()  # Modo evaluación
             y_src, _, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
             _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
@@ -241,76 +268,138 @@ def net_test_model(net, test_images, test_segs, flag, device):
             ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
             rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
             mean_dice_score = np.mean(dice_score)
+
+            # Append the scores to the lists
+            ssims.append(ssim_score)
+            rmses.append(rmse_score)
+            dices.append(mean_dice_score)
+
             print(f'Test with pair {i} and {j} - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
 
+             ### PLOT THE RESULTS ###
+            slice_idx = 149
+
+            #PRO TIP! For sagital views: [slice_idx, :, :], for coronal views: [:, slice_idx, :], for axial views: [:, :, slice_idx]
+
+            I1_slice = I1.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
+            I2_slice = I2.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
+            y_src_slice = y_src.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
+
+            fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+            ax[0].imshow(I1_slice, cmap='gray')
+            ax[0].set_title('Source Image')
+            ax[0].axis('off')
+            ax[1].imshow(I2_slice, cmap='gray')
+            ax[1].set_title('Target Image')
+            ax[1].axis('off')
+            ax[2].imshow(y_src_slice, cmap='gray')
+            ax[2].set_title('Warped Image')
+            ax[2].axis('off')
+            plt.show()
+
+
             # save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
+
+    # Calculate the average scores
+    avg_ssim = np.mean(ssims)
+    avg_rmse = np.mean(rmses)
+    avg_dice = np.mean(dices)
+
+    print(f'Average SSIM: {avg_ssim:.4f}, Average RMSE: {avg_rmse:.4f}, Average Dice: {avg_dice:.4f}')
 
 def main():
     args = parse_arguments()
     para, device = load_parameters()
 
-    _debug = False
 
-    target_index = 1
-    source_index = 2
+    ## ONLY 2 IMAGES ##
+    # target_index = 1
+    # source_index = 2
 
-    (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
+    # (input_image, input_segmentation), (target_image, target_segmentation) = load_data(tgt_index=target_index, src_index=source_index)
 
-    #normalize images
-    input_image = (input_image - torch.min(input_image)) / (torch.max(input_image) - torch.min(input_image))
-    target_image = (target_image - torch.min(target_image)) / (torch.max(target_image) - torch.min(target_image))
-    input_segmentation = (input_segmentation - torch.min(input_segmentation)) / (torch.max(input_segmentation) - torch.min(input_segmentation))
-    target_segmentation = (target_segmentation - torch.min(target_segmentation)) / (torch.max(target_segmentation) - torch.min(target_segmentation))
+    # input_image = (input_image - torch.min(input_image)) / (torch.max(input_image) - torch.min(input_image))
+    # target_image = (target_image - torch.min(target_image)) / (torch.max(target_image) - torch.min(target_image))
+    # input_segmentation = (input_segmentation - torch.min(input_segmentation)) / (torch.max(input_segmentation) - torch.min(input_segmentation))
+    # target_segmentation = (target_segmentation - torch.min(target_segmentation)) / (torch.max(target_segmentation) - torch.min(target_segmentation))
 
-    I1 = convert_to_tensor(input_image, device)
-    I2 = convert_to_tensor(target_image, device)
-    I1_seg = convert_to_tensor(input_segmentation, device)
-    I2_seg = convert_to_tensor(target_segmentation, device)
+    # I1 = convert_to_tensor(input_image, device)
+    # I2 = convert_to_tensor(target_image, device)
+    # I1_seg = convert_to_tensor(input_segmentation, device)
+    # I2_seg = convert_to_tensor(target_segmentation, device)
 
-    #we have 256 silces, we have volume of 128x128x256, we take the first 128 slices
+    ### LOAD ALL IMAGES ###
+    all_dataset = load_all_data()
+    shuffled_dataset = all_dataset.copy()
 
-    # shape form: [B, C, H, W, D] # B=1, C=1, H=128, W=128, D=256
-        
+    # We have 256 silces, we have volume of 128x128x256, we take the first 128 slices
+    # Shape form: [B, C, H, W, D] # B=1, C=1, H=128, W=128, D=256
+    num_total_images = len(all_dataset)
+    num_train = int(num_total_images * 0.8)
+    num_val = num_total_images - num_train
+
+    assert num_train + num_val == num_total_images, "Train and test split does not match total images"
+
+
+    ### PREPARE DATASET ###
+    context = 1 
+
+    if context == 1:
+        train_dataset = shuffled_dataset[:num_train]
+        val_dataset = shuffled_dataset[num_train:num_train + num_val]
+        test_dataset = shuffled_dataset[num_train + num_val:]             #0!
+
+    elif context == 2:
+        train_dataset = shuffled_dataset[:num_train]
+        val_dataset = shuffled_dataset[num_train:num_train + num_val]
+        #add one image and segmentation pair to the train dataset
+        train_dataset.append(val_dataset[0])
+        #test is empty
+        test_dataset = shuffled_dataset[num_train + num_val:]
+
+    elif context == 3:
+        #All of the test images are visible during training
+        train_dataset = shuffled_dataset[:num_train]
+        val_dataset = shuffled_dataset[num_train:num_train + num_val]
+        #add all images and segmentations to the train dataset
+        train_dataset.extend(val_dataset)
+        #test is empty
+        test_dataset = shuffled_dataset[num_train + num_val:]
+
+
+
+    ### CONVERT TO TENSORS ###
+    train_images = [data[0] for data in train_dataset]
+    train_segmentations = [data[1] for data in train_dataset]
+    train_images_tensor = get_tensor_dataset(train_images, device)
+    train_segmentations_tensor = get_tensor_dataset(train_segmentations, device)
+    #----------------------------------------------------------
+    val_images = [data[0] for data in val_dataset]
+    val_segmentations = [data[1] for data in val_dataset]
+    val_images_tensor = get_tensor_dataset(val_images, device)
+    val_segmentations_tensor = get_tensor_dataset(val_segmentations, device)
+    #----------------------------------------------------------
+    test_images = [data[0] for data in test_dataset]
+    test_segmentations = [data[1] for data in test_dataset]
+    test_images_tensor = get_tensor_dataset(test_images, device)
+    test_segmentations_tensor = get_tensor_dataset(test_segmentations, device)
+    #----------------------------------------------------------
+
+            
+
     net, criterion, optimizer = initialize_network_optimizer(128, 128, 256, para, device)
 
-    input("Training with all possible pairs of images...")
-    train_images = [I1, I2]
-    train_segmentations = [I1_seg, I2_seg]
 
     time_init = time.time()
-    phi_inv, y_src, _, _ = train_model_with_validation(net, optimizer, args.pretrain, train_images, train_segmentations, 1, 0.001, device, criterion, 'SVF', val_every=10)
+    ### TRAINING (ONLY PAIRWISE) ###
+    phi_inv, y_src, _, _ = train_model_with_validation(net, optimizer, args.pretrain, train_images_tensor, train_segmentations_tensor, 1, 0.001, device, criterion, 'SVF', val_every=10)
     
     torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
     time_end = time.time()
     print(f'Training time: {time_end - time_init} seconds')
-
-    #load the model in eval mode
-    net.load_state_dict(torch.load(os.path.join(args.output, 'model_trained.pth')))
-
-    # net_test_model(net, test_images, test_seg, shooting_flag, device)
-    net_test_model(net, train_images, train_segmentations, 'SVF', device)
+    net_test_model(net, val_images_tensor, val_segmentations_tensor, 'SVF', device)
     
-
-    slice_idx = 149
-    #For sagital views: [slice_idx, :, :], for coronal views: [:, slice_idx, :], for axial views: [:, :, slice_idx]
-
-    I1_slice = I1.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
-    I2_slice = I2.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
-    y_src_slice = y_src.squeeze().cpu().detach().numpy()[:, :, slice_idx]  # (H, W)
-
-    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-    ax[0].imshow(I1_slice, cmap='gray')
-    ax[0].set_title('Source Image')
-    ax[0].axis('off')
-    ax[1].imshow(I2_slice, cmap='gray')
-    ax[1].set_title('Target Image')
-    ax[1].axis('off')
-    ax[2].imshow(y_src_slice, cmap='gray')
-    ax[2].set_title('Warped Image')
-    ax[2].axis('off')
-    plt.show()
-
-    #plot the grid (phi_inv)
+   
 
 if __name__ == '__main__':
     main()

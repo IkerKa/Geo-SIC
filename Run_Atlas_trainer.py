@@ -243,7 +243,7 @@ def initialize_network_optimizer2D(xDim, yDim, para, dev):
                       nb_unet_conv_per_level=1,
                       int_steps=7,
                       int_downsize=2,
-                      bidir=True,
+                      bidir=False,
                       src_feats=1,
                       trg_feats=1,
                       unet_half_res=True)

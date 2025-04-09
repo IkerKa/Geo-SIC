@@ -71,7 +71,7 @@ def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
-def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=165,view =2):
+def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=155,view =2):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True, view=view)
     return datahandler.get_all_images()
 
@@ -194,7 +194,7 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
             reg_save = torch.zeros(b, w, h, 2).to(device)
 
             I1, I2 = I1.to(device).float(), I2.to(device).float()
-            y_src, y_tgt, momentum, momentum_neg,  _, new_locs, new_locs_inv = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
+            y_src, momentum,  _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
             warped_img,_, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
             # momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
@@ -202,7 +202,7 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
 
 
             if flag == 'SVF':
-                Dist = (NCC().loss(I2, y_src) + NCC().loss(y_tgt, I1))
+                Dist = (NCC().loss(I2, y_src)) # + NCC().loss(y_tgt, I1))
                 Reg = Grad(penalty='l2')
                 Reg_loss = Reg.loss2D(momentum)
                 # Dice_loss = DiceLoss(device=device)
@@ -389,7 +389,7 @@ def net_test_model(net, test_images, test_segs, flag, device):
     y_srcs = []
 
     ssims = []
-    rmse = []
+    rmse  = []
     dices = []
 
     with torch.no_grad():
@@ -403,7 +403,7 @@ def net_test_model(net, test_images, test_segs, flag, device):
             I1 = I1.to(device).float()
             I2 = I2.to(device).float()
             net.eval()  # Modo evaluación
-            y_src, _, _, _, _, new_locs, _ = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
             _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
 
             phiinvs.append(new_locs[0,...])
@@ -427,7 +427,7 @@ def net_test_model(net, test_images, test_segs, flag, device):
         #print the average
         print(f'Average - SSIM: {np.mean(ssims):.4f}, RMSE: {np.mean(rmse):.4f}, Dice: {np.mean(dices):.4f}')
         
-        # plot_results(test_images, test_segs, phiinvs, y_srcs)
+        plot_results(test_images, test_segs, phiinvs, y_srcs, device, _save = True)
             
 
 
@@ -564,7 +564,7 @@ def save_metrics(output_path, I2, y_src, ssim_score, rmse_score, mean_dice_score
 
 
 
-def plot_results(test_images, test_shapes, phiinvs, y_srcs):
+def plot_results(test_images, test_shapes, phiinvs, y_srcs, device,  _save = False):
     
     #for every possible pair
     pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images)) if i != j]
@@ -579,6 +579,8 @@ def plot_results(test_images, test_shapes, phiinvs, y_srcs):
         I2 = test_images[pair[1]]
         I1_seg = test_shapes[shapes_pairs[pair_idx][0]]
         I2_seg = test_shapes[shapes_pairs[pair_idx][1]]
+
+        warped_img, fixed_img, dice_score = compute_segmentation(I1_seg, phiinvs[pair_idx], I2_seg, device)
 
         phi_inv = phiinvs[pair_idx]
         y_src = y_srcs[pair_idx]
@@ -612,8 +614,57 @@ def plot_results(test_images, test_shapes, phiinvs, y_srcs):
         plt.tight_layout()
         plt.show()
 
+        #plot the same for the shapes
+        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+        axes[0].imshow(I1_seg.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[0].set_title('Source Segmentation (I1_seg)')
+        axes[1].imshow(I2_seg.squeeze().cpu().detach().numpy(), cmap='gray')
+        axes[1].set_title('Target Segmentation (I2_seg)')
+        axes[2].imshow(warped_img, cmap='gray')
+        axes[2].set_title('Warped Segmentation (I1_seg -> I2_seg)')
+
+        # Calculate and plot the shape error
+        shape_error = I2_seg.squeeze().cpu().detach().numpy() - warped_img
+        axes[3].imshow(shape_error, cmap='gray')
+        axes[3].set_title('Shape Error (I2_seg - Warped)')
+
+        plt.tight_layout()
+        plt.show()
+
+        if _save == True:
+            # Save warped image, warped segmentation and grid
+            save_nifti(y_src, os.path.join('storage', f'warped_image_{pair[0]}_{pair[1]}.nii.gz'))
+            save_nifti(warped_img, os.path.join('storage', f'warped_segmentation_{pair[0]}_{pair[1]}.nii.gz'))
+            #save the phi_inv in numpy format
+            np.save(os.path.join('storage', f'grid_{pair[0]}_{pair[1]}.npy'), phi_inv.cpu().detach().numpy())
+            print(f'Saved warped image, warped segmentation and grid for pair {pair[0]}_{pair[1]}')
 
 
+
+
+# Utility function to save NIfTI files
+def save_nifti(image_tensor, file_path):
+    """
+    Save a PyTorch tensor as a NIfTI file.
+    """
+
+    #if it is already in numpy format, skip this step
+    if isinstance(image_tensor, np.ndarray):
+        image_np = image_tensor
+    else:
+        image_np = image_tensor.squeeze().cpu().detach().numpy()
+
+    nifti_image = nib.Nifti1Image(image_np, affine=np.eye(4))
+    nib.save(nifti_image, file_path)
+
+def load_nifti(file_path):
+    """
+    Load a NIfTI file as a PyTorch tensor.
+    """
+    nifti_image = nib.load(file_path)
+    image_np = nifti_image.get_fdata()
+    image_tensor = torch.tensor(image_np, dtype=torch.float32)
+    return image_tensor.unsqueeze(0)  # Add batch dimension
 
 # Main execution block
 def main():
@@ -690,14 +741,16 @@ def main():
         # print(f'Original dataset size: {len(all_dataset) - len(augmented_dataset)}')
         # print(f'Augmented dataset size: {len(augmented_dataset)}')
 
-        
+        # Dejar dos imagenes de test fijas al igual que slice_idx.
 
         # shuffled_dataset = random.sample(all_dataset, len(all_dataset))
         shuffled_dataset = all_dataset.copy()
-
         num_total = len(shuffled_dataset)
-        num_train = int(num_total * 0.8)  # 80% for training
-        num_val = num_total - num_train  # Remaining for validation
+        num_train = 14
+        num_val = 2  # Remaining for validation
+        # num_total = len(shuffled_dataset)
+        # num_train = int(num_total * 0.8)  # 80% for training
+        # num_val = num_total - num_train  # Remaining for validation
 
         # Ensure no leftover by checking the sum matches the total
         assert num_train + num_val == num_total, "The split sizes do not match the total dataset size."
@@ -744,33 +797,74 @@ def main():
         print("---" * 20)
 
 
-        train_images = [data[0] for data in train_dataset]
-        train_seg = [data[1] for data in train_dataset]
+        Dtrain_images = [data[0] for data in train_dataset]
+        Dtrain_seg = [data[1] for data in train_dataset]
 
-        val_images = [data[0] for data in val_dataset]
-        val_seg = [data[1] for data in val_dataset]
+        Dval_images = [data[0] for data in val_dataset]
+        Dval_seg = [data[1] for data in val_dataset]
 
-        test_images = [data[0] for data in test_dataset]
-        test_seg = [data[1] for data in test_dataset]
+        Dtest_images = [data[0] for data in test_dataset]
+        Dtest_seg = [data[1] for data in test_dataset]
 
         # Convert to tensors
-        train_images = get_tensor_dataset(train_images, device)
-        train_seg = get_tensor_dataset(train_seg, device)
+        train_images = get_tensor_dataset(Dtrain_images, device)
+        train_seg = get_tensor_dataset(Dtrain_seg, device)
         #--
-        val_images = get_tensor_dataset(val_images, device)
-        val_seg = get_tensor_dataset(val_seg, device)
+        val_images = get_tensor_dataset(Dval_images, device)
+        val_seg = get_tensor_dataset(Dval_seg, device)
         #--
-        test_images = get_tensor_dataset(test_images, device)
-        test_seg = get_tensor_dataset(test_seg, device)
+        test_images = get_tensor_dataset(Dtest_images, device)
+        test_seg = get_tensor_dataset(Dtest_seg, device)
+        # Plot the test images and their segmentations in a 2x2 grid
+        if len(val_images) >= 2 and len(val_seg) >= 2:
 
-        #plot an image to see if it works
-        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-        axes[0].imshow(train_images[0].squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[0].set_title('Train Image (I1)')
-        axes[1].imshow(train_seg[0].squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[1].set_title('Train Segmentation (I1)')
-        plt.show()
+            if not os.path.exists('storage'):
+                os.makedirs('storage')
 
+            if (
+                os.path.exists(os.path.join('storage', 'test_image_1.nii.gz')) and
+                os.path.exists(os.path.join('storage', 'test_image_2.nii.gz')) and
+                os.path.exists(os.path.join('storage', 'test_segmentation_1.nii.gz')) and
+                os.path.exists(os.path.join('storage', 'test_segmentation_2.nii.gz'))
+            ):
+                print("Test images and segmentations already exist in the storage folder.")
+            else:
+                save_nifti(val_images[0], os.path.join('storage', 'test_image_1.nii.gz'))
+                save_nifti(val_images[1], os.path.join('storage', 'test_image_2.nii.gz'))
+                save_nifti(val_seg[0], os.path.join('storage', 'test_segmentation_1.nii.gz'))
+                save_nifti(val_seg[1], os.path.join('storage', 'test_segmentation_2.nii.gz'))
+
+            #load them and plot them
+            val_images_plot = [load_nifti(os.path.join('storage', 'test_image_1.nii.gz')), load_nifti(os.path.join('storage', 'test_image_2.nii.gz'))]
+            val_seg_plot = [load_nifti(os.path.join('storage', 'test_segmentation_1.nii.gz')), load_nifti(os.path.join('storage', 'test_segmentation_2.nii.gz'))]
+            
+
+            fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+            
+            # Plot the first test image
+            axes[0, 0].imshow(val_images_plot[0].squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[0, 0].set_title('Test Image 1')
+            axes[0, 0].axis('off')
+            
+            # Plot the segmentation of the first test image
+            axes[0, 1].imshow(val_seg_plot[0].squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[0, 1].set_title('Segmentation 1')
+            axes[0, 1].axis('off')
+            
+            # Plot the second test image
+            axes[1, 0].imshow(val_images_plot[1].squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[1, 0].set_title('Test Image 2')
+            axes[1, 0].axis('off')
+            
+            # Plot the segmentation of the second test image
+            axes[1, 1].imshow(val_seg_plot[1].squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[1, 1].set_title('Segmentation 2')
+            axes[1, 1].axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+        else:
+            print("Not enough test images or segmentations to plot.")
 
         net, criterion, optimizer = initialize_network_optimizer2D(128, 128, para, device)
 
@@ -790,7 +884,7 @@ def main():
         #load the model in eval mode
         net.load_state_dict(torch.load(os.path.join(args.output, 'model_trained.pth')))
 
-        # net_test_model(net, test_images, test_seg, shooting_flag, device)
+        # net_test_model(net, val_images, test_seg, shooting_flag, device)
 
         # WE DONT HAVE TEST ANY MORE, ONLY VALIDATION
         net_test_model(net, val_images, val_seg, shooting_flag, device)

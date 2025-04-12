@@ -1,1 +1,0 @@
-{"net": "./pretrained_networks/net_epochs_50.pth", "epochs": "50", "momentum_mean": 2.7592193418968236e-06, "momentum_max": 0.0008806454134173691, "momentum_min": -0.0001763795007718727, "distance": 0.02047816663980484, "ssim": 0.5992583359561504}

@@ -321,12 +321,16 @@ class NiftiDataset(Dataset):
         self.seg = seg
         self.view = view
 
+        
+
         # Obtener los archivos (se asume que no son segmentaciones)
         all_files = [f for f in os.listdir(directory) if f.endswith('.nii.gz') 
                      and not f.endswith('_seg.nii.gz') and f.startswith('na')]
         all_seg_files = [f for f in os.listdir(directory) if f.endswith('_seg.nii.gz')
                          and f.startswith('na')]
         self.files = sorted(all_files)
+
+
 
         # Cargar las imágenes NIfTI
         self.images = [nib.load(os.path.join(directory, f)) for f in self.files]

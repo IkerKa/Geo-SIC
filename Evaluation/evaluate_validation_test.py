@@ -71,7 +71,7 @@ def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
-def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=155,view =2):
+def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=160, view=2):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True, view=view)
     return datahandler.get_all_images()
 
@@ -155,7 +155,7 @@ def validate_model(net, val_images, val_segs, device):
 
     return np.mean(ssim_scores), np.mean(rmse_scores), np.mean(dice_scores)
 
-def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, train_segmentations, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
+def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, train_segmentations, device, flag = 'SVF'):
     loss_total = 0
     phi_inv = None
     ssim_per_epoch, loss_per_epoch, val_dice_scores = [], [], []
@@ -163,11 +163,14 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
     # #Combine train and val datasets
     # train_dataset = train_dataset + val_dataset
     # pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
-    pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
-    print(f'Training with {len(pairs)} pairs of images...')
+    # pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
+    # print(f'Training with {len(pairs)} pairs of images...')
 
-    batch_size = 2
+    batch_size = 4
     acc_loss = 0
+    
+    plot_phis = []
+
     tqdm_epochs = tqdm.tqdm(total=num_epochs, desc="Training Progress", leave=False)
     for epoch in range(num_epochs):
         tqdm_epochs.update(1)
@@ -180,6 +183,9 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
         pair_loss = []
         pair_ssim = []
         pair_dice = []
+
+        pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
+        pairs = random.sample(pairs, k=min(len(pairs), 100))  # Limit to 100 pairs for training
 
         for pair_idx, (i,j) in enumerate(pairs):
 
@@ -203,18 +209,19 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
 
             if flag == 'SVF':
                 Dist = (NCC().loss(I2, y_src)) # + NCC().loss(y_tgt, I1))
+                # Dist = MSE().loss(I2, y_src)
                 Reg = Grad(penalty='l2')
                 Reg_loss = Reg.loss2D(momentum)
                 # Dice_loss = DiceLoss(device=device)
 
-                loss_total = (1 * Dist + 0.01 * Reg_loss) / batch_size
+                loss_total = (1 * Dist + 0.1 * Reg_loss)
                 acc_loss += loss_total
 
             if (pair_idx + 1) % batch_size == 0 or pair_idx == len(pairs) - 1:
                 avg_loss = acc_loss / batch_size
                 avg_loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
+                optimizer.step()      # Update model parameters
+                optimizer.zero_grad() # Reset gradients
                 acc_loss = 0
 
             # Update the loss and ssim values
@@ -222,10 +229,17 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
             pair_ssim.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                     data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
             pair_dice.append(dice_score)
-            
+
             with torch.no_grad():
                 phi_inv = new_locs[0,...]
 
+        
+        if epoch % 10 == 0:
+            plot_phis.append(phi_inv.cpu().detach().numpy())
+            # plt.imshow(phi_inv[:, :, 0].cpu().detach().numpy(), cmap='jet')
+            # plt.title('Deformation Field (X)')
+            # plt.show()
+            
         
         mean_loss = np.mean(pair_loss)
         mean_ssim = np.mean(pair_ssim)
@@ -262,6 +276,18 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
 
     plt.tight_layout()
     plt.show()
+
+    #animation of the phi_inv
+    fig, ax = plt.subplots(figsize=(10, 10))
+    for i in range(len(plot_phis)):
+        ax.clear()
+        ax.imshow(plot_phis[i][:, :, 0], cmap='jet')
+        ax.set_title('Deformation Field (X)')
+        plt.pause(0.1)
+
+        plt.show()
+
+        
 
 
     return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
@@ -876,7 +902,7 @@ def main():
         
         input("Training with all possible pairs of images...")
         # phi_inv, _, loss, ssim = train_model_with_validation(net, optimizer, args.pretrain, train_images, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
-        phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, train_seg, val_images, val_seg, 10, 0.001, device, criterion, shooting_flag, val_every=20)
+        phi_inv, _, loss, ssim = exhaustive_train_model_with_validation(net, optimizer, args.pretrain, train_images, train_seg, device, shooting_flag)
         torch.save(net.state_dict(), os.path.join(args.output, 'model_trained.pth'))
         time_end = time.time()
         print(f'Training time: {time_end - time_init} seconds')

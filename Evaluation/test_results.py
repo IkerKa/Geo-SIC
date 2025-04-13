@@ -70,8 +70,6 @@ def plot_results(moving_image, fixed_image, moving_segmentation, fixed_segmentat
 
 
 
-
-
 # Results
     #     -/Sagital
     #         -/metrics.json

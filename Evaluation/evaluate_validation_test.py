@@ -388,6 +388,8 @@ def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_d
 def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
 
     phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
+    #print the min and the max of the phi_inv
+    # print(f'phi_inv min: {phi_inv.min()}, max: {phi_inv.max()}')
     spat_trans = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
     warped_seg = spat_trans(I1_seg, phi_inv)
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()

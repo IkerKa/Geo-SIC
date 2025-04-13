@@ -39,6 +39,7 @@ def plot_results(moving_image, fixed_image, moving_segmentation, fixed_segmentat
     ax = axes[4]
     interval = 2
     phi_inv = phi_inv.squeeze(0).cpu().detach().numpy()
+    phi_inv[:, :, 1] = -phi_inv[:, :, 1]  # Flip along the Y-axis
     for row in range(0, phi_inv.shape[0], interval):
         ax.plot(phi_inv[row, :, 0],
                 phi_inv[row, :, 1],

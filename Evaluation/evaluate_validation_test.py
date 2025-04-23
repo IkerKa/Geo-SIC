@@ -71,7 +71,7 @@ def load_data(nifti_datadir='nirep/nifti/', size=128, slice_index=149, tgt_index
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True)
     return datahandler.get_image(src_index), datahandler.get_image(tgt_index)
 
-def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=160, view=2):
+def load_all_data(nifti_datadir='nirep/nifti/', size=128, slice_index=90, view=2):
     datahandler = dh(dataset_type='nifti', directory=nifti_datadir, size=size, slice_index=slice_index, seg=True, view=view)
     return datahandler.get_all_images()
 
@@ -158,7 +158,7 @@ def validate_model(net, val_images, val_segs, device):
 def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, train_segmentations, device, flag = 'SVF'):
     loss_total = 0
     phi_inv = None
-    ssim_per_epoch, loss_per_epoch, val_dice_scores = [], [], []
+    ssim_per_epoch, loss_per_epoch, val_dice_scores, val_dice_medians = [], [], [], []
 
     # #Combine train and val datasets
     # train_dataset = train_dataset + val_dataset
@@ -183,6 +183,7 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
         pair_loss = []
         pair_ssim = []
         pair_dice = []
+        pair_dice_median = []
 
         pairs = [(i, j) for i in range(len(train_dataset)) for j in range(i + 1, len(train_dataset))]
         pairs = random.sample(pairs, k=min(len(pairs), 100))  # Limit to 100 pairs for training
@@ -201,8 +202,7 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
 
             I1, I2 = I1.to(device).float(), I2.to(device).float()
             y_src, momentum,  _, new_locs = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
-            warped_img,_, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
-
+            warped_img, _, dice_mean, dice_median = compute_segmentation(I1_seg, new_locs[0, ...], I2_seg, device)
             # momentum = momentum.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
             # momentum_neg = momentum_neg.permute(0, 3, 1, 2)  # Permute to [batch, 2, height, width]
 
@@ -228,7 +228,8 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
             pair_loss.append(loss_total.item())
             pair_ssim.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                     data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
-            pair_dice.append(dice_score)
+            pair_dice.append(dice_mean)
+            pair_dice_median.append(dice_median)
 
             with torch.no_grad():
                 phi_inv = new_locs[0,...]
@@ -244,319 +245,170 @@ def exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dat
         mean_loss = np.mean(pair_loss)
         mean_ssim = np.mean(pair_ssim)
         mean_dice = np.mean(pair_dice)
+        mean_dice_median = np.mean(pair_dice_median)
         loss_per_epoch.append(mean_loss)
         ssim_per_epoch.append(mean_ssim)
         val_dice_scores.append(mean_dice)
+        val_dice_medians.append(mean_dice_median)
 
 
-        tqdm_epochs.set_postfix(loss=mean_loss, ssim=mean_ssim, dice=mean_dice)
+        tqdm_epochs.set_postfix(loss=mean_loss, ssim=mean_ssim, dice=mean_dice, dice_median=mean_dice_median)
 
 
 
 
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axs = plt.subplots(2, 2, figsize=(15, 10))
 
-    axs[0].plot(loss_per_epoch, label='Loss', color='blue')
-    axs[0].set_title('Loss over epochs')
-    axs[0].set_xlabel('Epoch')
-    axs[0].set_ylabel('Loss')
-    axs[0].legend()
+    # Plot Loss
+    axs[0, 0].plot(loss_per_epoch, label='Loss', color='blue')
+    axs[0, 0].set_title('Loss over epochs')
+    axs[0, 0].set_xlabel('Epoch')
+    axs[0, 0].set_ylabel('Loss')
+    axs[0, 0].legend()
 
-    axs[1].plot(ssim_per_epoch, label='SSIM', color='green')
-    axs[1].set_title('SSIM over epochs')
-    axs[1].set_xlabel('Epoch')
-    axs[1].set_ylabel('SSIM')
-    axs[1].legend()
+    # Plot SSIM
+    axs[0, 1].plot(ssim_per_epoch, label='SSIM', color='green')
+    axs[0, 1].set_title('SSIM over epochs')
+    axs[0, 1].set_xlabel('Epoch')
+    axs[0, 1].set_ylabel('SSIM')
+    axs[0, 1].legend()
 
-    axs[2].plot(val_dice_scores, label='Dice', color='red')
-    axs[2].set_title('Dice over epochs')
-    axs[2].set_xlabel('Epoch')
-    axs[2].set_ylabel('Dice')
-    axs[2].legend()
+    # Plot Dice Scores
+    axs[1, 0].plot(val_dice_scores, label='Dice Mean', color='red')
+    axs[1, 0].set_title('Dice Mean over epochs')
+    axs[1, 0].set_xlabel('Epoch')
+    axs[1, 0].set_ylabel('Dice Mean')
+    axs[1, 0].legend()
+
+    # Plot Dice Medians
+    axs[1, 1].plot(val_dice_medians, label='Dice Median', color='purple')
+    axs[1, 1].set_title('Dice Median over epochs')
+    axs[1, 1].set_xlabel('Epoch')
+    axs[1, 1].set_ylabel('Dice Median')
+    axs[1, 1].legend()
 
     plt.tight_layout()
     plt.show()
 
-    #animation of the phi_inv
-    fig, ax = plt.subplots(figsize=(10, 10))
-    for i in range(len(plot_phis)):
-        ax.clear()
-        ax.imshow(plot_phis[i][:, :, 0], cmap='jet')
-        ax.set_title('Deformation Field (X)')
-        plt.pause(0.1)
+    # #animation of the phi_inv
+    # fig, ax = plt.subplots(figsize=(10, 10))
+    # for i in range(len(plot_phis)):
+    #     ax.clear()
+    #     ax.imshow(plot_phis[i][:, :, 0], cmap='jet')
+    #     ax.set_title('Deformation Field (X)')
+    #     plt.pause(0.1)
 
-        plt.show()
+    #     plt.show()
 
         
 
-
-    return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
-
-def train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, criterion=None, flag = 'SVF', val_every=5):
-    loss_total = 0
-    phi_inv = None
-    ssim_per_epoch, loss_per_epoch = [], []
-    val_ssim_scores, val_rmse_scores, val_dice_scores = [], [], []
-
-    
-
-    # #Combine train and val datasets
-    # train_dataset = train_dataset + val_dataset
-    pairs = [(i, j) for i in range(len(train_dataset)) for j in range(len(train_dataset))]
-    print(f'Training with {len(pairs)} pairs of images...')
-    
-    with tqdm.tqdm(total=num_epochs, desc="Training Progress", leave=False) as tqdm_epochs: 
-        for epoch in range(num_epochs):
-            tqdm_epochs.update(1)
-
-            tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
-
-            net.train()
-
-            phiinv = None
-            optimizer.zero_grad()
-
-            idx = random.randint(0, len(train_dataset) - 1)
-            I1, I2 = train_dataset[idx], train_dataset[(idx + 1) % len(train_dataset)]
-
-            b, c, w, h = I1.shape
-            phiinv_bch = torch.zeros(b, w, h, 2).to(device)
-            reg_save = torch.zeros(b, w, h, 2).to(device)
-
-
-            # Per each epoch, train with all possible pairs of images? can be that done? i think it would improve
-            tqdm_epochs.set_description(f'Epoch {epoch + 1}/{num_epochs}')
-            net.train()
-            optimizer.zero_grad()
-
-
-
-            I1, I2 = I1.to(device).float(), I2.to(device).float()
-            y_src, y_target, momentum, _, new_locs, new_locs_neg = net(I1, I2, registration=True, shooting="SVF", return_phi=True)
-            momentum = momentum.permute(0, 3, 2, 1) 
-            if flag == 'SVF':
-                Dist = NCC().loss(I2, y_src) + NCC().loss(y_target, I1)
-                Reg = Grad(penalty='l1')
-                Reg_loss = Reg.loss2D(momentum)
-
-                loss_total = 1 * Dist + 0.05 * Reg_loss
-                loss_total.backward()
-            #TODO revisar el bloque de EPD
-            else:
-                momentum = momentum.permute(0, 3, 2, 1) # ? ARE THE SIZES CORRECT?
-
-                #MATHS things
-                img_size = 128
-                identity = get_grid2D(img_size, device).permute([0, 3, 2, 1])
-                epd = Epdiff2D(device, (16, 16), (128, 128), 5, 0.5, 2)
-                # logger.divider("Math part")
-
-                for b_id in range(b):
-                    v_fourier = epd.spatial2fourier(momentum[b_id,...].reshape(128, 128, 2))
-                    velocity = epd.fourier2spatial(epd.Kcoeff * v_fourier).reshape(128, 128, 2)
-                    reg_temp = epd.fourier2spatial(epd.Lcoeff * v_fourier * v_fourier)
-                    num_steps = 12
-                    v_seq, displacement = epd.forward_shooting_v_and_phiinv(velocity, num_steps)    # ! Bottleneck for complexity
-                    phiinv = displacement.unsqueeze(0) + identity
-                    phiinv_bch[b_id,...] = phiinv
-                    reg_save[b_id,...] = reg_temp
-
-                dfm = Torchinterp2D(I1,phiinv_bch)
-                Dist = criterion(dfm, I2)
-                Reg_loss =  reg_save.sum()
-                loss_total =  weight_dist * Dist + weight_reg * Reg_loss
-                loss_total.backward(retain_graph=True)
-
-
-            tqdm_epochs.set_postfix(loss=loss_total.item(), ssim=ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
-                                        data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
-
-            # Update the network parameters
-            optimizer.step()
-
-            # Update the loss and ssim values
-            loss_per_epoch.append(loss_total.item())
-            ssim_per_epoch.append(ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
-                                        data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
-
-
-            with torch.no_grad():
-                phi_inv = new_locs[0,...]
 
     return phi_inv, y_src, loss_per_epoch, ssim_per_epoch
 
 def compute_segmentation(I1_seg, phi_inv, I2_seg, dev):
-
-    phi_inv = phi_inv.permute(2,0,1).unsqueeze(0)
-    #print the min and the max of the phi_inv
-    # print(f'phi_inv min: {phi_inv.min()}, max: {phi_inv.max()}')
+    phi_inv = phi_inv.permute(2, 0, 1).unsqueeze(0)
     spat_trans = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
     warped_seg = spat_trans(I1_seg, phi_inv)
+
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
     fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
-    # dice_score = dc(warped_seg_np, fixed_seg_np)
 
-    #take the labels
     labels = np.unique(fixed_seg_np)
     labels = labels[labels != 0]
 
-    #compute dice score for each label
     dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
-    dice = np.mean(dice_scores)
 
-    return warped_seg_np, fixed_seg_np, dice
+    # Filtrar valores NaN y ceros
+    filtered_scores = [d for d in dice_scores if not np.isnan(d) and d > 0]
+
+    if len(filtered_scores) > 0:
+        dice_mean = np.mean(filtered_scores)
+        dice_median = np.median(filtered_scores)
+    else:
+        dice_mean = 0.0
+        dice_median = 0.0
+
+    return warped_seg_np, fixed_seg_np, dice_mean, dice_median
+
 
 def net_test_model(net, test_images, test_segs, flag, device):
-    # with the trained model, test the images (phi inverted)
-
-    # can be also use the net?
     pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images)) if i != j]
     print(f'Testing {len(pairs)} pairs of images...')
 
-    phiinvs = []
-    y_srcs = []
-
     ssims = []
-    rmse  = []
-    dices = []
+    rmses = []
+    dice_means = []
+    dice_medians = []
+    phis = []
 
     with torch.no_grad():
         net.eval()
         for i, j in pairs:
-            I1 = test_images[i]
-            I2 = test_images[j]
+            I1 = test_images[i].to(device).float()
+            I2 = test_images[j].to(device).float()
             I1_seg = test_segs[i]
             I2_seg = test_segs[j]
 
-            I1 = I1.to(device).float()
-            I2 = I2.to(device).float()
-            net.eval()  # Modo evaluación
             y_src, _, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
-            _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
+            phis.append(new_locs[0,...])
+            _, _, dice_mean, dice_median = compute_segmentation(I1_seg, new_locs[0, ...], I2_seg, device)
 
-            phiinvs.append(new_locs[0,...])
-            y_srcs.append(y_src)
-
-
-
-            #obtain the metrics and save them
-            ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
+            ssim_score = ssim(
+                y_src.squeeze().cpu().detach().numpy(),
+                I2.squeeze().cpu().detach().numpy(),
+                data_range=I2.max().item() - I2.min().item()
+            )
             rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
-            mean_dice_score = np.mean(dice_score)
 
             ssims.append(ssim_score)
-            rmse.append(rmse_score)
-            dices.append(mean_dice_score)
+            rmses.append(rmse_score)
+            dice_means.append(dice_mean)
+            dice_medians.append(dice_median)
 
-            # print(f'Test - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
+            print(f'Pair {i},{j} - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice Mean: {dice_mean:.4f}, Dice Median: {dice_median:.4f}')
 
-            # save_metrics('output', I2, y_src, ssim_score, rmse_score, mean_dice_score)
+        print(f'\nAverage - SSIM: {np.mean(ssims):.4f}, RMSE: {np.mean(rmses):.4f}, Dice Mean: {np.mean(dice_means):.4f}, Dice Median: {np.median(dice_medians):.4f}')
 
-        #print the average
-        print(f'Average - SSIM: {np.mean(ssims):.4f}, RMSE: {np.mean(rmse):.4f}, Dice: {np.mean(dices):.4f}')
-        
-        plot_results(test_images, test_segs, phiinvs, y_srcs, device, _save = True)
-            
+        #Plot some results
+        for i, j in pairs:
+            I1 = test_images[i].to(device).float()
+            I2 = test_images[j].to(device).float()
+            I1_seg = test_segs[i]
+            I2_seg = test_segs[j]
 
+            phi_inv = phis[i]
 
+            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting=flag, return_phi=True)
+            warped_img, _, dice_mean, dice_median = compute_segmentation(I1_seg, new_locs[0, ...], I2_seg, device)
 
-def fine_tune_deformation(net, test_dataset, test_segmentations, device, criterion, num_steps=100, lr=0.01):
+            fig, axes = plt.subplots(1, 5, figsize=(25, 5))
+            axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[0].set_title('Source Image (I1)')
+            axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[1].set_title('Target Image (I2)')
+            axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[2].set_title('Registered Image (y_src)')
+            error = I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()
+            axes[3].imshow(error, cmap='gray')
+            axes[3].set_title('Error (I2 - y_src)')
 
-    #after the inference we are going to fine tune the model with the test images
-    #we are going to use the same pairs of images as in the inference
-    pairs = [(i, j) for i in range(len(test_dataset)) for j in range(len(test_dataset))]
-    print(f'Fine tunning {len(pairs)} pairs of images...')
+            # Plotting the deformation grid for phi_inv
+            ax = axes[4]
+            interval = 2
 
-    all_pairs_loss = []
+            for row in range(0, phi_inv.shape[0], interval):
+                ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),
+                    phi_inv[row, :, 1].cpu().detach().numpy(),
+                    'm')
 
-    for i, j in pairs:
-        I1 = test_dataset[i]
-        I2 = test_dataset[j]
-        I1_seg = test_segmentations[i]
-        I2_seg = test_segmentations[j]
+            for col in range(0, phi_inv.shape[1], interval):
+                ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),
+                    phi_inv[:, col, 1].cpu().detach().numpy(),
+                    'm')
 
-        I1 = I1.to(device).float()
-        I2 = I2.to(device).float()
-        # Set the network to training mode
-        net.train()
-        optimizer = optim.SGD(net.parameters(), lr=lr, momentum=0.9)
-
-        loss_per_step = []
-        for step in range(num_steps):
-            optimizer.zero_grad()
-            # Forward pass through the network
-            y_src, momentum, _, _ = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
-
-            # Compute the loss for the image deformation
-            dist_loss = criterion(y_src, I2)
-            reg_loss = Grad(penalty='l2').loss2D(momentum)
-            loss_total = 10 * dist_loss + 0.001 * reg_loss
-
-            # Backpropagation
-            loss_total.backward()
-            loss_per_step.append(loss_total.item())
-            # Update the network parameters
-            optimizer.step()
-
-            # # Print the loss every 10 steps
-            # if step % 10 == 0:
-            #     print(f'Step {step}/{num_steps}, Loss: {loss_total.item():.4f}')
-
-
-        #save current loss vector
-        all_pairs_loss.append(([i, j], loss_per_step))
-
-        
-
-        #-Evaluate the fine-tuned model
-        with torch.no_grad():
-            net.eval()
-            y_src, _, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
-            _, _, dice_score = compute_segmentation(I1_seg, new_locs[0,...], I2_seg, device)
-
-            #obtain the metrics and save them
-            ssim_score = ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(), data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min())
-            rmse_score = np.sqrt(np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2))
-            mean_dice_score = dice_score
-
-            #plot the results
-            # fig, axes = plt.subplots(1, 4, figsize=(24, 6))
-            # axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
-            # axes[0].set_title('Source Image (I1)')
-            # axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
-            # axes[1].set_title('Target Image (I2)')
-            # axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
-            # axes[2].set_title('Warped Image (y_src)')
-
-            # # Plotting the deformation grid for phi_inv
-            # ax = axes[3]
-            # interval = 2
-
-            # for row in range(0, new_locs[0,...].shape[0], interval):
-            #     ax.plot(new_locs[0,...][row, :, 0].cpu().detach().numpy(),
-            #             new_locs[0,...][row, :, 1].cpu().detach().numpy(),
-            #             'm')
-
-            # for col in range(0, new_locs[0,...].shape[1], interval):
-            #     ax.plot(new_locs[0,...][:, col, 0].cpu().detach().numpy(),
-            #             new_locs[0,...][:, col, 1].cpu().detach().numpy(),
-            #             'm')
-
-            # plt.show()
-
-            
-            print(f'Fine tuning - SSIM: {ssim_score:.4f}, RMSE: {rmse_score:.4f}, Dice: {mean_dice_score:.4f}')
-
-
-    #plot all the losses
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for pair, loss in all_pairs_loss:
-        ax.plot(loss, label=f'Pair {pair}')
-    ax.set_xlabel('Step')
-    ax.set_ylabel('Loss')
-    ax.set_title('Loss vs Step')
-    ax.legend()
-    plt.show()
+            ax.set_title("Diffeomorphic deformation grid")
+            plt.tight_layout()
+            plt.show()
 
 # Save metrics
 def save_metrics(output_path, I2, y_src, ssim_score, rmse_score, mean_dice_score):
@@ -589,86 +441,6 @@ def save_metrics(output_path, I2, y_src, ssim_score, rmse_score, mean_dice_score
 
     with open(os.path.join(output_path, 'metrics.json'), 'w') as f:
         json.dump(metrics_data, f, indent=4)
-
-
-
-def plot_results(test_images, test_shapes, phiinvs, y_srcs, device,  _save = False):
-    
-    #for every possible pair
-    pairs = [(i, j) for i in range(len(test_images)) for j in range(len(test_images)) if i != j]
-    shapes_pairs = [(i, j) for i in range(len(test_shapes)) for j in range(len(test_shapes)) if i != j]
-
-    for pair_idx, (pair) in enumerate(pairs):
-        #if the I1 == I2, skip it
-        if pair[0] == pair[1]:
-            continue
-
-        I1 = test_images[pair[0]]
-        I2 = test_images[pair[1]]
-        I1_seg = test_shapes[shapes_pairs[pair_idx][0]]
-        I2_seg = test_shapes[shapes_pairs[pair_idx][1]]
-
-        warped_img, fixed_img, dice_score = compute_segmentation(I1_seg, phiinvs[pair_idx], I2_seg, device)
-
-        phi_inv = phiinvs[pair_idx]
-        y_src = y_srcs[pair_idx]
-
-        fig, axes = plt.subplots(1, 5, figsize=(25, 5))
-        axes[0].imshow(I1.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[0].set_title('Source Image (I1)')
-        axes[1].imshow(I2.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[1].set_title('Target Image (I2)')
-        axes[2].imshow(y_src.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[2].set_title('Registered Image (y_src)')
-        error = I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()
-        axes[3].imshow(error, cmap='gray')
-        axes[3].set_title('Error (I2 - y_src)')
-
-        # Plotting the deformation grid for phi_inv
-        ax = axes[4]
-        interval = 2
-
-        for row in range(0, phi_inv.shape[0], interval):
-            ax.plot(phi_inv[row, :, 0].cpu().detach().numpy(),
-                phi_inv[row, :, 1].cpu().detach().numpy(),
-                'm')
-
-        for col in range(0, phi_inv.shape[1], interval):
-            ax.plot(phi_inv[:, col, 0].cpu().detach().numpy(),
-                phi_inv[:, col, 1].cpu().detach().numpy(),
-                'm')
-
-        ax.set_title("Diffeomorphic deformation grid")
-        plt.tight_layout()
-        plt.show()
-
-        #plot the same for the shapes
-        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
-        axes[0].imshow(I1_seg.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[0].set_title('Source Segmentation (I1_seg)')
-        axes[1].imshow(I2_seg.squeeze().cpu().detach().numpy(), cmap='gray')
-        axes[1].set_title('Target Segmentation (I2_seg)')
-        axes[2].imshow(warped_img, cmap='gray')
-        axes[2].set_title('Warped Segmentation (I1_seg -> I2_seg)')
-
-        # Calculate and plot the shape error
-        shape_error = I2_seg.squeeze().cpu().detach().numpy() - warped_img
-        axes[3].imshow(shape_error, cmap='gray')
-        axes[3].set_title('Shape Error (I2_seg - Warped)')
-
-        plt.tight_layout()
-        plt.show()
-
-        if _save == True:
-            # Save warped image, warped segmentation and grid
-            save_nifti(y_src, os.path.join('storage', f'warped_image_{pair[0]}_{pair[1]}.nii.gz'))
-            save_nifti(warped_img, os.path.join('storage', f'warped_segmentation_{pair[0]}_{pair[1]}.nii.gz'))
-            #save the phi_inv in numpy format
-            np.save(os.path.join('storage', f'grid_{pair[0]}_{pair[1]}.npy'), phi_inv.cpu().detach().numpy())
-            print(f'Saved warped image, warped segmentation and grid for pair {pair[0]}_{pair[1]}')
-
-
-
 
 # Utility function to save NIfTI files
 def save_nifti(image_tensor, file_path):
@@ -742,11 +514,11 @@ def main():
             os.makedirs('models')
 
         # Load data
-        all_dataset = load_all_data()
+        all_dataset = load_all_data(slice_index=128, view=3)
 
-        augment = T.Compose([
-                    T.RandomAffine(degrees=5, translate=(0.02, 0.02), scale=(0.95, 1.05)),
-        ])
+        # augment = T.Compose([
+        #             T.RandomAffine(degrees=5, translate=(0.02, 0.02), scale=(0.95, 1.05)),
+        # ])
 
         # # Extend the dataset with augmented data
         # augmented_dataset = []
@@ -843,60 +615,24 @@ def main():
         #--
         test_images = get_tensor_dataset(Dtest_images, device)
         test_seg = get_tensor_dataset(Dtest_seg, device)
-        # Plot the test images and their segmentations in a 2x2 grid
-        if len(val_images) >= 2 and len(val_seg) >= 2:
+        
 
-            if not os.path.exists('storage'):
-                os.makedirs('storage')
-
-            if (
-                os.path.exists(os.path.join('storage', 'test_image_1.nii.gz')) and
-                os.path.exists(os.path.join('storage', 'test_image_2.nii.gz')) and
-                os.path.exists(os.path.join('storage', 'test_segmentation_1.nii.gz')) and
-                os.path.exists(os.path.join('storage', 'test_segmentation_2.nii.gz'))
-            ):
-                print("Test images and segmentations already exist in the storage folder.")
-            else:
-                save_nifti(val_images[0], os.path.join('storage', 'test_image_1.nii.gz'))
-                save_nifti(val_images[1], os.path.join('storage', 'test_image_2.nii.gz'))
-                save_nifti(val_seg[0], os.path.join('storage', 'test_segmentation_1.nii.gz'))
-                save_nifti(val_seg[1], os.path.join('storage', 'test_segmentation_2.nii.gz'))
-
-            #load them and plot them
-            val_images_plot = [load_nifti(os.path.join('storage', 'test_image_1.nii.gz')), load_nifti(os.path.join('storage', 'test_image_2.nii.gz'))]
-            val_seg_plot = [load_nifti(os.path.join('storage', 'test_segmentation_1.nii.gz')), load_nifti(os.path.join('storage', 'test_segmentation_2.nii.gz'))]
-            
-
-            fig, axes = plt.subplots(2, 2, figsize=(10, 10))
-            
-            # Plot the first test image
-            axes[0, 0].imshow(val_images_plot[0].squeeze().cpu().detach().numpy(), cmap='gray')
-            axes[0, 0].set_title('Test Image 1')
-            axes[0, 0].axis('off')
-            
-            # Plot the segmentation of the first test image
-            axes[0, 1].imshow(val_seg_plot[0].squeeze().cpu().detach().numpy(), cmap='gray')
-            axes[0, 1].set_title('Segmentation 1')
-            axes[0, 1].axis('off')
-            
-            # Plot the second test image
-            axes[1, 0].imshow(val_images_plot[1].squeeze().cpu().detach().numpy(), cmap='gray')
-            axes[1, 0].set_title('Test Image 2')
-            axes[1, 0].axis('off')
-            
-            # Plot the segmentation of the second test image
-            axes[1, 1].imshow(val_seg_plot[1].squeeze().cpu().detach().numpy(), cmap='gray')
-            axes[1, 1].set_title('Segmentation 2')
-            axes[1, 1].axis('off')
-            
-            plt.tight_layout()
+        #Plot the test images
+        for i in range(len(val_images)):
+            fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+            axes[0].imshow(val_images[i].squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[0].set_title('Test Image (I1)')
+            axes[1].imshow(val_seg[i].squeeze().cpu().detach().numpy(), cmap='gray')
+            axes[1].set_title('Test Segmentation (I1_seg)')
             plt.show()
-        else:
-            print("Not enough test images or segmentations to plot.")
+
 
         net, criterion, optimizer = initialize_network_optimizer2D(128, 128, para, device)
 
         shooting_flag = 'SVF'
+
+        print(f"Before training...")
+        net_test_model(net, val_images, val_seg, shooting_flag, device)
 
         time_init = time.time()
         # ef exhaustive_train_model_with_validation(net, optimizer, num_epochs, train_dataset, val_dataset, val_segmentations, weight_dist, weight_reg, device, val_every=5)
@@ -915,17 +651,11 @@ def main():
         # net_test_model(net, val_images, test_seg, shooting_flag, device)
 
         # WE DONT HAVE TEST ANY MORE, ONLY VALIDATION
+        print(f"After training...")
         net_test_model(net, val_images, val_seg, shooting_flag, device)
 
         # if shooting_flag == 'SVF':
         #     fine_tune_deformation(net, test_images, test_seg, device, criterion, num_steps=80, lr=0.01)
-
-
-        
-
-        
-
-
 
 if __name__ == '__main__':
     main()

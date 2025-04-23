@@ -69,6 +69,16 @@ def plot_results(moving_image, fixed_image, moving_segmentation, fixed_segmentat
     config.plt.tight_layout()
     config.plt.show()
 
+    #save the I1, I2, and y_src images as nifti files
+    config.nib.save(config.nib.Nifti1Image(I1.squeeze().cpu().detach().numpy(), config.np.eye(4)), 'I1.nii.gz')
+    config.nib.save(config.nib.Nifti1Image(I2.squeeze().cpu().detach().numpy(), config.np.eye(4)), 'I2.nii.gz')
+    config.nib.save(config.nib.Nifti1Image(y_src.squeeze().cpu().detach().numpy(), config.np.eye(4)), 'I1toI2.nii.gz')
+    #same for the segmentations
+    config.nib.save(config.nib.Nifti1Image(I1_seg.squeeze().cpu().detach().numpy(), config.np.eye(4)), 'I1_seg.nii.gz')
+    config.nib.save(config.nib.Nifti1Image(I2_seg.squeeze().cpu().detach().numpy(), config.np.eye(4)), 'I2_seg.nii.gz')
+    config.nib.save(config.nib.Nifti1Image(warped_img, config.np.eye(4)), 'I1_seg_to_I2_seg.nii.gz')
+
+
 
 
 # Results

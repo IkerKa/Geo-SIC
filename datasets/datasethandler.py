@@ -331,7 +331,6 @@ class NiftiDataset(Dataset):
         self.files = sorted(all_files)
 
 
-
         # Cargar las imágenes NIfTI
         self.images = [nib.load(os.path.join(directory, f)) for f in self.files]
         self.seg_images = [nib.load(os.path.join(directory, f)) for f in all_seg_files]
@@ -430,6 +429,7 @@ class NiftiDataset3D(Dataset):
         
         # Load Image
         image_data = self.images[idx].get_fdata()  # Shape: (H, W, D)
+        print(f"Image shape: {image_data}")
         depth = image_data.shape[2]  # Number of slices
 
         # Resize if needed
@@ -442,6 +442,7 @@ class NiftiDataset3D(Dataset):
 
         # Convert to tensor [C, D, H, W]
         volume_tensor = torch.from_numpy(image_data).unsqueeze(0).float()  # (1, D, H, W)
+        print(f"Volume shape: {volume_tensor.shape}")
 
         if self.transform:
             volume_tensor = self.transform(volume_tensor)

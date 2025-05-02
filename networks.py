@@ -58,6 +58,7 @@ def default_unet_features():
     return [[16, 32, 32, 32], [32, 32, 32, 32, 32, 16, 16]]
 
 
+
 class Unet(nn.Module):
     """
     A unet architecture. Layer features can be specified directly as a list of encoder and decoder
@@ -70,6 +71,7 @@ class Unet(nn.Module):
     Neural network adapted for 1D, 2D, or 3D data.
     
     """
+
 
     def __init__(self,
                  inshape=None,
@@ -192,13 +194,7 @@ class Unet(nn.Module):
             if not self.half_res or level < (self.nb_levels - 2):
                 x = self.upsampling[level](x)
                 x = torch.cat([x, x_history.pop()], dim=1)
-                # Ensure dimensions are valid before interpolation
-                #determine interpolation method 
-                # target_size = x_history[-1].shape[2:]
-                # if all(dim > 0 for dim in target_size):
-                #     x = F.interpolate(x, size=target_size, mode="trilinear", align_corners=True)
-                # print(f"Shape before concatenation: x: {x.shape}, x_history: {x_history[-1].shape}")
-                
+
 
         # remaining convs at full resolution
         for conv in self.remaining:
@@ -304,6 +300,9 @@ class UnetDense(LoadableModel):
 
         # configure transformer
         self.transformer = SpatialTransformer(inshape)
+
+        print(f"Grid initialized: {inshape}")
+        print(f"Flow initialized: {self.flow.weight.shape}")
 
     def forward(self, source, target, registration=False, shooting = None, return_phi=False):
         '''

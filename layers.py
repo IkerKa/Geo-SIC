@@ -27,6 +27,8 @@ class SpatialTransformer(nn.Module):
         # see: https://discuss.pytorch.org/t/how-to-register-buffer-without-polluting-state-dict
         self.register_buffer('grid', grid)
 
+        # print('SpatialTransformer: grid shape: %s' % str(grid.shape))
+
     def forward(self, src, flow, return_phi=False):
         # new locations
 

@@ -16,6 +16,11 @@ class SpatialTransformer(nn.Module):
         # create sampling grid
         vectors = [torch.arange(0, s) for s in size]
         grids = torch.meshgrid(vectors)
+        # for i in range(len(size)):
+        #     print(f"Vector {i}: {vectors[i]}")
+
+        # print('SpatialTransformer: grid shape: %s' % str(grids[0].shape))
+        # print('SpatialTransformer: grid shape: %s' % str(grids[1].shape))
         grid = torch.stack(grids)
         grid = torch.unsqueeze(grid, 0)
         grid = grid.type(torch.FloatTensor)

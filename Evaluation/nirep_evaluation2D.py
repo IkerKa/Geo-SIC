@@ -12,9 +12,41 @@ from networks import UnetDense
 # New imports
 from scipy.io import loadmat
 from logger import Logger
+from scipy.io import savemat
+
 
 
 ### Functions
+
+#Evaluate the phi saved
+import torch
+import numpy as np
+from scipy.io import loadmat
+import torch.nn.functional as F
+import config  # Make sure this includes SpatialTransformer, compute_dice, etc.
+
+def evaluate_with_saved_phi(fixed_seg, moving_seg, phi_path, device):
+    # Load phi_inv from .mat file
+    mat = loadmat(phi_path)
+    phi_inv = mat['phi_inv']  # Shape: [H, W, 2]
+
+    print(f"phi_inv shape: {phi_inv.shape}")
+
+    phi_inv = torch.tensor(phi_inv, dtype=torch.float32).unsqueeze(0).to(device)  # Shape: [1, H, W, 2]
+
+    fig, ax = config.plt.subplots(figsize=(8, 8))
+    interval = 2
+    phi_inv_np = phi_inv.squeeze().cpu().numpy()
+
+    for row in range(0, phi_inv_np.shape[0], interval):
+        ax.plot(phi_inv_np[row, :, 0], -phi_inv_np[row, :, 1], 'm')
+
+    for col in range(0, phi_inv_np.shape[1], interval):
+        ax.plot(phi_inv_np[:, col, 0], -phi_inv_np[:, col, 1], 'm')
+
+    ax.set_title("Diffeomorphic deformation grid")
+    config.plt.show()
+
 def custom_training(net, optimizer, num_epochs, fixed, moving, device):
     loss_total = 0
     phi_inv = None
@@ -45,8 +77,8 @@ def custom_training(net, optimizer, num_epochs, fixed, moving, device):
         loss_total = (1 * Dist + 0.01 * Reg_loss)
         loss_total.backward()
 
-        optimizer.step()                        # Update model parameters
-        optimizer.zero_grad()                   # Reset gradients
+        optimizer.step()                        
+        optimizer.zero_grad()                
         pair_loss.append(loss_total.item())
         pair_ssim.append(config.ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                 data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
@@ -67,11 +99,14 @@ def pad_to_multiple(tensor, multiple=16):
     pad_h = (multiple - h % multiple) % multiple
     pad_w = (multiple - w % multiple) % multiple
 
-    # Pad at the bottom and right only (to avoid shifting content)
-    padding = (0, pad_w, 0, pad_h)  # (left, right, top, bottom)
-    return F.pad(tensor, padding, mode='constant', value=0)
+    padding = (0, pad_w, 0, pad_h) 
+    print(f"Padding: {padding}")
+    print(f"Tensor shape before padding: {tensor.shape}")
+    tensor_padded = F.pad(tensor, padding, mode='constant', value=0)
+    print(f"Tensor shape after padding: {tensor_padded.shape}")
+    return tensor_padded
 
-def net_test_model(net, fixed, moving, fixed_seg, moving_seg, device):
+def net_test_model(net, fixed, moving, fixed_seg, moving_seg, save_phi, device):
 
     ssims = []
     rmses = []
@@ -88,6 +123,12 @@ def net_test_model(net, fixed, moving, fixed_seg, moving_seg, device):
         I1_seg, I2_seg = I1_seg.to(device).float(), I2_seg.to(device).float()
 
         y_src, _, _, new_locs = net(I1, I2, registration=True, shooting='SVF', return_phi=True)
+
+        if save_phi:
+            phi_inv = new_locs[0,...]
+            savemat('phi_inv.mat', {'phi_inv': phi_inv.cpu().detach().numpy()})
+            print(f"phi_inv shape: {phi_inv.shape}")
+
         warped_seg, _, _, dice_median = CustomSegmentation(I1_seg, new_locs[0, ...], I2_seg, device)
 
         phis.append(new_locs[0,...])
@@ -163,7 +204,7 @@ def CustomSegmentation(I1_seg, phi_inv, I2_seg, dev):
     phi_resized = F.interpolate(
         phi_inv.permute(0, 3, 1, 2),
         size=I1_seg.shape[-2:], 
-        mode='bilinear', 
+        mode='bilinear',
         align_corners=True
     )
     phi_resized = phi_resized.permute(0, 1, 2, 3) # B, C, H, W because grid of transformer is B, H, W, C
@@ -252,9 +293,8 @@ target = torch.tensor(moving, dtype=torch.float32)
 
 
 ### Extract the slice from the 3D volume
-slice_idx = 88
-
-## PRO TIP! For sagital views: [slice_idx, :, :], for coronal views: [:, slice_idx, :], for axial views: [:, :, slice_idx]
+slice_idx = 90
+# For sagital views: [slice_idx, :, :], for coronal views: [:, slice_idx, :], for axial views: [:, :, slice_idx]
 logger.divider('Slicing the 3D volume')
 
 # Transpose and flip to fix the orientation
@@ -333,15 +373,20 @@ net.to(device)
 
 logger.info(f"Before training...")
 net.eval()
-net_test_model(net, fixed=target, moving=source, fixed_seg=fixed_seg, moving_seg=fixed_mov, device=device)
+net_test_model(net, fixed=target, moving=source, fixed_seg=fixed_seg, moving_seg=fixed_mov, save_phi=False, device=device)
 
 net.train()
 custom_training(net, optimizer, num_epochs=200, fixed=target, moving=source, device=device)
 
 logger.info(f"After training...")
 net.eval()
-net_test_model(net, fixed=target, moving=source, fixed_seg=fixed_seg, moving_seg=fixed_mov, device=device)
+net_test_model(net, fixed=target, moving=source, fixed_seg=fixed_seg, moving_seg=fixed_mov, save_phi=True, device=device)
 
+
+eval_mat = True
+if eval_mat:
+    phi_path = 'phi_inv.mat'
+    evaluate_with_saved_phi(fixed_seg, fixed_mov, phi_path, device)
 
 
 

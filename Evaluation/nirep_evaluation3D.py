@@ -23,35 +23,93 @@ import torch
 import numpy as np
 from scipy.io import loadmat
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+
+class RandomPairDataset(Dataset):
+    def __init__(self, images):
+        self.images = images
+
+    def __len__(self):
+        return 10000  # Número arbitrario de pares aleatorios por época
+
+    def __getitem__(self, idx):
+        idx1 = np.random.randint(len(self.images))
+        idx2 = np.random.randint(len(self.images))
+        while idx2 == idx1:
+            idx2 = np.random.randint(len(self.images))
+        img1 = self.images[idx1].squeeze(0).squeeze(0)  # [D, H, W]
+        img2 = self.images[idx2].squeeze(0).squeeze(0)
+        return img1, img2
+
+
+def random_training_dataloader(net, optimizer, num_epochs, train_images, device, batch_size=2, num_workers=0):
+    dataset = RandomPairDataset(train_images)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    loss_per_epoch = []
+    net.train()
+
+    for epoch in range(num_epochs):
+        epoch_loss = 0
+        for batch_idx, (source_batch, moving_batch) in enumerate(loader):
+            print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx+1}/{len(loader)}", end='\r')
+            # source_batch, moving_batch: [batch, D, H, W]
+            # Añade dims: [batch, 1, D, H, W]
+            source_batch = source_batch.unsqueeze(1).to(device)
+            moving_batch = moving_batch.unsqueeze(1).to(device)
+
+            optimizer.zero_grad()
+            y_src, momentum, _, _ = net(moving_batch, source_batch, registration=True, shooting="SVF", return_phi=True)
+            Dist = config.NCC().loss(y_src, source_batch)
+            Reg = config.Grad(penalty='l2')
+            loss = Dist + Reg.loss(momentum)
+
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+
+            # To limit 
+            if batch_idx >= 5:
+                break
+
+        mean_loss = epoch_loss / (batch_idx + 1)
+        loss_per_epoch.append(mean_loss)
+        logger.info(f"Epoch {epoch+1}/{num_epochs} - Loss: {mean_loss:.4f}")
+
+    logger.info(f"Training completed. Mean loss per epoch: {np.mean(loss_per_epoch):.4f}")
 
 def random_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
-    loss_total = 0
     loss_per_epoch = []
+    net.train()
 
     for epoch in range(num_epochs):
         epoch_loss = 0
         for batch in range(num_batches):
-            # Use logger instead of print to avoid overlapping outputs
-            print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch+1}/{num_batches}", end='\r')
-            batch_loss = 0
+            total_loss = 0
+
+            l = 0
             for _ in range(batch_size):
+                print(f"Batch {batch+1}, iteration {l+1}/{batch_size}, Epoch {epoch+1}/{num_epochs}", end='\r')
+                l += 1
                 source_idx = np.random.randint(len(train_images))
                 moving_idx = np.random.randint(len(train_images))
+                while moving_idx == source_idx:
+                    moving_idx = np.random.randint(len(train_images))
+
                 source_image = train_images[source_idx].to(device)
                 moving_image = train_images[moving_idx].to(device)
 
                 y_src, momentum, _, _ = net(moving_image, source_image, registration=True, shooting="SVF", return_phi=True)
                 Dist = config.NCC().loss(y_src, source_image)
                 Reg = config.Grad(penalty='l2')
-                Reg_loss = Reg.loss(momentum)
-                loss = Dist + Reg_loss
-                batch_loss += loss
+                loss = Dist + Reg.loss(momentum)
 
-            batch_loss = batch_loss / batch_size
-            batch_loss.backward()
+                total_loss += loss
+
+            total_loss = total_loss / batch_size
+            total_loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-            epoch_loss += batch_loss.item()
+            epoch_loss += total_loss.item()
 
         mean_loss = epoch_loss / num_batches
         loss_per_epoch.append(mean_loss)
@@ -59,18 +117,19 @@ def random_training(net, optimizer, num_epochs, train_images, device, num_batche
         if (epoch + 1) % 10 == 0 or epoch == 0:
             logger.info(f"Epoch {epoch+1}/{num_epochs} - Loss: {mean_loss:.4f}")
 
-    logger.info(f"Training completed. Total loss: {sum(loss_per_epoch):.4f}")
-    logger.info(f"Mean loss per epoch: {np.mean(loss_per_epoch):.4f}")
+    logger.info(f"Training completed. Mean loss per epoch: {np.mean(loss_per_epoch):.4f}")
 
-    #Plot a graph of the loss per epoch
-    _ , ax = plt.subplots()
-    ax.plot(range(1, num_epochs + 1), loss_per_epoch, marker='o')
-    ax.set_title('Training Loss per Epoch')
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss')
-    ax.grid(True)
+    # Plot
+    plt.figure()
+    plt.plot(range(1, num_epochs + 1), loss_per_epoch, marker='o')
+    plt.title('Training Loss per Epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
     plt.show()
-  
+
+    # return loss_per_epoch
+
 def selected_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
     loss_total = 0
     loss_per_epoch = []
@@ -187,31 +246,33 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             # Plotting the deformation grid for phi_inv (slice slice_idx)
             ax = axes[4]
             interval = 2
-            phi_inv = new_locs[0,...].cpu().detach().numpy()  # (D, H, W, 3)
             slice_idx = 90
+            interval = 4  # puedes ajustar para ver más o menos líneas
 
-            # Plano axial (XY): eje Z = slice_idx
-            phi_slice = phi_inv[slice_idx, :, :, :]  # (H, W, 3)
+            phi_inv = new_locs[0,...].cpu().detach().numpy()  # shape: (Z, Y, X, 3)
+            phi_slice = phi_inv[slice_idx, :, :, :]       # (Y, X, 3) → axial
 
-            # Extraer deformación en X e Y
-            for row in range(0, phi_slice.shape[0], interval):
+            for row in range(0, phi_slice.shape[0], interval):  # sobre filas (Y)
                 ax.plot(
-                    phi_slice[row, :, 1],        # eje X
-                    -phi_slice[row, :, 0],        # eje Y
+                    phi_slice[row, :, 0],           # X'
+                    -phi_slice[row, :, 1],          # Y' (con flip vertical)
                     'm'
                 )
 
-            for col in range(0, phi_slice.shape[1], interval):
+            for col in range(0, phi_slice.shape[1], interval):  # sobre columnas (X)
                 ax.plot(
-                    phi_slice[:, col, 1],
-                    -phi_slice[:, col, 0],
+                    phi_slice[:, col, 0],           # X'
+                    -phi_slice[:, col, 1],          # Y'
                     'm'
                 )
 
-            ax.set_title('Deformation Grid - Axial (XY) Slice')
+            ax.set_title(f'Deformation Grid (Axial slice {slice_idx})')
             ax.set_aspect('equal')
             ax.grid(True)
             plt.show()
+
+            
+
             
             #Plot the segmentation results
             # fig, axes = plt.subplots(1, 4, figsize=(15, 5))
@@ -412,6 +473,7 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 
 net.train()
 logger.info('Starting training with random pairs of images')
+# random_training_dataloader(net, optimizer, num_epochs=2, train_images=train_data['images'], device=device, batch_size=8)
 random_training(net, optimizer, num_epochs=100, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
 # logger.info('Starting training with fixed source and random moving images')
 # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)

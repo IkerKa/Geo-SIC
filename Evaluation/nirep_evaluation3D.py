@@ -72,8 +72,7 @@ def random_training(net, optimizer, num_epochs, train_images, device, num_batche
     ax.set_ylabel('Loss')
     ax.grid(True)
     plt.show()
-
-        
+  
 def selected_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
     loss_total = 0
     loss_per_epoch = []
@@ -127,6 +126,123 @@ def selected_training(net, optimizer, num_epochs, train_images, device, num_batc
     ax.set_ylabel('Loss')
     ax.grid(True)
     plt.show()
+
+def net_test_model_3d(net, test_dataset, save_phi, device):
+    """
+    Test the registration network on a 3D test dataset.
+    Args:
+        net: The trained registration network.
+        test_dataset: dict with 'images' and 'segmentations' lists (each element: (1,1,D,H,W) tensor).
+        save_phi: bool, whether to save the deformation field.
+        device: torch.device.
+    """
+    ssims = []
+    rmses = []
+    phis = []
+
+    num_cases = len(test_dataset['images'])
+    for i in range(0, num_cases, 2):
+        # Use pairs: (i, i+1)
+        if i+1 >= num_cases:
+            break
+        fixed = test_dataset['images'][i].to(device).float()
+        moving = test_dataset['images'][i+1].to(device).float()
+        fixed_seg = test_dataset['segmentations'][i].to(device).float()
+        moving_seg = test_dataset['segmentations'][i+1].to(device).float()
+        with torch.no_grad():
+            y_src, _, _, new_locs = net(moving, fixed, registration=True, shooting='SVF', return_phi=True)
+
+            if save_phi:
+                phi_inv = new_locs[0,...].cpu().detach().numpy()
+                savemat(f'phi_inv_3d_{i}.mat', {'phi_inv': phi_inv})
+
+            warped_seg, _, dice_mean, dice_median = customSegmentation(moving_seg, new_locs[0,...], fixed_seg, device)
+            phis.append(new_locs[0].cpu())
+
+            # Optionally, compute SSIM and RMSE 
+            # ssims.append(ssim_score)
+            # rmses.append(rmse_score)
+            print(f'Pair {i}-{i+1}: Dice mean: {dice_mean:.4f}, Dice median: {dice_median:.4f}')
+
+            # Visualize the 90th slice along the third axis (z-axis)
+            slice_idx = 90
+            fig, axes = plt.subplots(1, 4, figsize=(18, 5))
+            axes[0].imshow(moving.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
+            axes[0].set_title('Moving Image (slice 90)')
+            axes[1].imshow(fixed.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
+            axes[1].set_title('Fixed Image (slice 90)')
+            axes[2].imshow(y_src.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
+            axes[2].set_title('Registered Image (slice 90)')
+            axes[3].imshow(warped_seg[:, :, slice_idx], cmap='gray')
+            axes[3].set_title('Warped Segmentation (slice 90)')
+            plt.tight_layout()
+            plt.show()
+
+
+def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
+    print(f"Original phi_inv shape: {phi_inv.shape}")
+
+    if phi_inv.dim() == 4 and phi_inv.shape[-1] == 3:
+        phi_inv = phi_inv.permute(3, 0, 1, 2).unsqueeze(0)  # [1, 3, D, H, W]
+    elif phi_inv.dim() == 3:
+        phi_inv = phi_inv.unsqueeze(0)
+
+    # Ensure input segmentations have correct shape: (N, C, D, H, W)
+    if I1_seg.dim() == 3:
+        I1_seg = I1_seg.unsqueeze(0).unsqueeze(0)  # (1, 1, D, H, W)
+    elif I1_seg.dim() == 4:
+        I1_seg = I1_seg.unsqueeze(0)  # (1, C, D, H, W)
+
+    if I2_seg.dim() == 3:
+        I2_seg = I2_seg.unsqueeze(0).unsqueeze(0)
+    elif I2_seg.dim() == 4:
+        I2_seg = I2_seg.unsqueeze(0)
+
+    print(f"phi_inv after reshape: {phi_inv.shape}")
+
+    # I am having big memory issues. so i will try other things.
+    if phi_inv.shape[-3:] != I1_seg.shape[-3:]:
+        print("Downsampling segmentations to match phi_inv...")
+        I1_seg = F.interpolate(I1_seg, size=phi_inv.shape[-3:], mode='nearest')
+        I2_seg = F.interpolate(I2_seg, size=phi_inv.shape[-3:], mode='nearest')
+        phi_resized = phi_inv
+    # if phi_inv.shape[-3:] != I1_seg.shape[-3:]:
+    #     print("Interpolating phi_inv to match input size...")
+    #     phi_resized = F.interpolate(
+    #         phi_inv,
+    #         size=I1_seg.shape[-3:],  # D, H, W
+    #         mode='trilinear',
+    #         align_corners=True
+    #     )
+    # else:
+    #     print("No interpolation needed.")
+    #     phi_resized = phi_inv
+
+    print(f"phi_resized shape: {phi_resized.shape}")
+
+    spat_trans = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
+
+    with torch.cuda.amp.autocast('cuda'):
+        warped_seg = spat_trans(I1_seg, phi_resized)
+
+    warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
+    fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
+
+    labels = np.unique(fixed_seg_np)
+    labels = labels[labels != 0]
+
+    dice_scores = compute_dice(warped_seg_np, fixed_seg_np, labels)
+
+    filtered_scores = [d for d in dice_scores if not np.isnan(d) and d > 0]
+
+    if len(filtered_scores) > 0:
+        dice_mean = np.mean(filtered_scores)
+        dice_median = np.median(filtered_scores)
+    else:
+        dice_mean = 0.0
+        dice_median = 0.0
+
+    return warped_seg_np, fixed_seg_np, dice_mean, dice_median
 
 
 def pad_to_multiple(tensor, multiple=16):
@@ -220,6 +336,8 @@ logger.info(f'Test set size: {len(test_data["images"])}')
 logger.info('Shape of images before padding: ' + str(train_data['images'][0].shape))
 train_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in train_data['images']]
 train_data['images'] = [pad_to_multiple(img) for img in train_data['images']]
+test_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in test_data['images']]
+test_data['images'] = [pad_to_multiple(img) for img in test_data['images']]
 logger.info('Shape of images after padding: ' + str(train_data['images'][0].shape))
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -230,8 +348,14 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 
 net.train()
 logger.info('Starting training with random pairs of images')
-random_training(net, optimizer, num_epochs=100, train_images=train_data['images'], device=device)
+random_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+# logger.info('Starting training with fixed source and random moving images')
+# selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 
+#Evaluation
+logger.info('Testing the trained model on the test dataset')
+net.eval()
+net_test_model_3d(net, test_dataset=test_data, save_phi=False, device=device)
 
 
 

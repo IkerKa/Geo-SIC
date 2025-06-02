@@ -165,26 +165,33 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             # Visualize the 90th slice along the third axis (z-axis)
             slice_idx = 90
 
-            # Plot images and deformation grid for slice 90
+            # Plot images and deformation grid for slice slice_idx
             fig, axes = plt.subplots(1, 5, figsize=(25, 5))
-            axes[0].imshow(moving.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[0].set_title('Source Image (Moving, slice 90)')
-            axes[1].imshow(fixed.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[1].set_title('Target Image (Fixed, slice 90)')
-            axes[2].imshow(y_src.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[2].set_title('Registered Image (y_src, slice 90)')
-            error = fixed.cpu().squeeze().numpy()[:, :, slice_idx] - y_src.cpu().squeeze().numpy()[:, :, slice_idx]
-            axes[3].imshow(error, cmap='gray')
-            axes[3].set_title('Error (Fixed - Registered, slice 90)')
+            moving_np = moving.cpu().squeeze().numpy()   # (D,H,W)
+            fixed_np = fixed.cpu().squeeze().numpy()
+            y_src_np = y_src.cpu().squeeze().numpy()
 
-            # Plotting the deformation grid for phi_inv (slice 90)
+            axes[0].imshow(moving_np[:, :, slice_idx], cmap='gray')
+            axes[0].set_title('Moving (Source) Image')
+
+            axes[1].imshow(fixed_np[:, :, slice_idx], cmap='gray')
+            axes[1].set_title('Fixed (Target) Image')
+
+            axes[2].imshow(y_src_np[:, :, slice_idx], cmap='gray')
+            axes[2].set_title('Registered Image')
+
+            error = fixed_np[:, :, slice_idx] - y_src_np[:, :, slice_idx]
+            axes[3].imshow(error, cmap='gray')
+            axes[3].set_title('Error (Fixed - Registered)')
+
+            # Plotting the deformation grid for phi_inv (slice slice_idx)
             ax = axes[4]
             interval = 2
             phi_inv = new_locs[0,...].cpu().detach().numpy()
             interval = 2
 
             # Slice plano XY
-            phi_slice = phi_inv[90, :, :, :]  # (H, W, 3)
+            phi_slice = phi_inv[slice_idx, :, :, :]  # (H, W, 3)
 
             for row in range(0, phi_slice.shape[0], interval):
                 ax.plot(
@@ -205,28 +212,30 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             plt.grid(True)
             plt.show()
 
-            # Another plot for the segmentation
-            fig, axes = plt.subplots(1, 4, figsize=(15, 5))
-            axes[0].imshow(moving_seg.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[0].set_title('Source Segmentation (Moving, slice 90)')
-            axes[1].imshow(fixed_seg.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[1].set_title('Target Segmentation (Fixed, slice 90)')
-            axes[2].imshow(warped_seg[:, :, slice_idx], cmap='gray')
-            axes[2].set_title('Warped Segmentation (slice 90)')
-            #error
-            fixed_slice = fixed_seg.cpu().squeeze().numpy()[:, :, slice_idx]
-            warped_slice = warped_seg[:, :, slice_idx]
-            # Resize warped_slice to match fixed_slice if needed
-            if fixed_slice.shape != warped_slice.shape:
-                from skimage.transform import resize
-                warped_slice_resized = resize(warped_slice, fixed_slice.shape, order=0, preserve_range=True, anti_aliasing=False).astype(warped_slice.dtype)
-            else:
-                warped_slice_resized = warped_slice
-            error_seg = fixed_slice - warped_slice_resized
-            axes[3].imshow(error_seg, cmap='gray')
-            axes[3].set_title('Segmentation Error (Fixed - Warped, slice 90)')
-            plt.show()
+            
+            #Plot the segmentation results
+            # fig, axes = plt.subplots(1, 4, figsize=(15, 5))
+            # moving_seg_np = moving_seg.cpu().squeeze().numpy()
+            # fixed_seg_np = fixed_seg.cpu().squeeze().numpy()
+            # warped_seg_np = warped_seg
 
+            # axes[0].imshow(moving_seg_np[:, :, slice_idx], cmap='gray')
+            # axes[0].set_title('Moving Segmentation')
+            # axes[1].imshow(fixed_seg_np[:, :, slice_idx], cmap='gray')
+            # axes[1].set_title('Fixed Segmentation')
+            # axes[2].imshow(warped_seg_np[:, :, slice_idx], cmap='gray')
+            # axes[2].set_title('Warped Segmentation')
+
+            # if warped_seg_np.shape != fixed_seg_np.shape:
+            #     #Resize warped_seg to match fixed_seg
+            #     from skimage.transform import resize
+            #     warped_seg_np = resize(warped_seg_np, fixed_seg_np.shape, order=0, preserve_range=True, anti_aliasing=False)
+            
+            # error_seg = fixed_seg_np - warped_seg_np
+            # axes[3].imshow(error_seg[:, :, slice_idx], cmap='gray')
+            # axes[3].set_title('Segmentation Error (Fixed - Warped)')
+            # plt.tight_layout()
+            # plt.show()
 
             
                         
@@ -376,7 +385,7 @@ logger.info(f'Test set size: {len(test_data["images"])}')
 # i = 0  # Index of the first training image
 # img = train_data['images'][i].numpy()  # Convert tensor to numpy array
 # logger.info(f'Train image {i} shape: {img.shape}')
-# plt.imshow(img[:, :, 90], cmap='gray')
+# plt.imshow(img[:, :, slice_idx], cmap='gray')
 # plt.title('First Training Image Slice')
 # plt.show()
 
@@ -403,7 +412,7 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 
 net.train()
 logger.info('Starting training with random pairs of images')
-random_training(net, optimizer, num_epochs=20, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+random_training(net, optimizer, num_epochs=5, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
 # logger.info('Starting training with fixed source and random moving images')
 # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

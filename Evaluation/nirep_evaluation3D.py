@@ -187,31 +187,31 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             # Plotting the deformation grid for phi_inv (slice slice_idx)
             ax = axes[4]
             interval = 2
-            phi_inv = new_locs[0,...].cpu().detach().numpy()
-            interval = 2
+            phi_inv = new_locs[0,...].cpu().detach().numpy()  # (D, H, W, 3)
+            slice_idx = 90
 
-            # Slice plano XY
+            # Plano axial (XY): eje Z = slice_idx
             phi_slice = phi_inv[slice_idx, :, :, :]  # (H, W, 3)
 
+            # Extraer deformación en X e Y
             for row in range(0, phi_slice.shape[0], interval):
                 ax.plot(
-                    phi_slice[row, :, 0],         # X deformado
-                    -phi_slice[row, :, 1],        # Y deformado (con flip vertical si quieres)
+                    phi_slice[row, :, 1],        # eje X
+                    -phi_slice[row, :, 0],        # eje Y
                     'm'
                 )
 
             for col in range(0, phi_slice.shape[1], interval):
                 ax.plot(
-                    phi_slice[:, col, 0],         # X deformado
-                    -phi_slice[:, col, 1],        # Y deformado
+                    phi_slice[:, col, 1],
+                    -phi_slice[:, col, 0],
                     'm'
                 )
 
-            ax.set_title('Deformation Grid - Axial Slice')
+            ax.set_title('Deformation Grid - Axial (XY) Slice')
             ax.set_aspect('equal')
-            plt.grid(True)
+            ax.grid(True)
             plt.show()
-
             
             #Plot the segmentation results
             # fig, axes = plt.subplots(1, 4, figsize=(15, 5))
@@ -412,7 +412,7 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 
 net.train()
 logger.info('Starting training with random pairs of images')
-random_training(net, optimizer, num_epochs=5, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+random_training(net, optimizer, num_epochs=100, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
 # logger.info('Starting training with fixed source and random moving images')
 # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

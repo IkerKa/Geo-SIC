@@ -360,6 +360,8 @@ target = pad_to_multiple(target, 16)
 # fixed_seg = pad_to_multiple(fixed_seg, 16)
 # fixed_mov = pad_to_multiple(fixed_mov, 16)
 
+print(f"Source shape after padding: {source.shape}")
+
 xDim, yDim = source.shape[2], source.shape[3]
 
 logger.info(f"Source shape after padding: {source.shape}")

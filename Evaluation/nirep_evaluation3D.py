@@ -221,57 +221,56 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             # rmses.append(rmse_score)
             print(f'Pair {i}-{i+1}: Dice mean: {dice_mean:.4f}, Dice median: {dice_median:.4f}')
 
-            # Visualize the 90th slice along the third axis (z-axis)
-            slice_idx = 90
-
             # Plot images and deformation grid for slice slice_idx
             fig, axes = plt.subplots(1, 5, figsize=(25, 5))
             moving_np = moving.cpu().squeeze().numpy()   # (D,H,W)
             fixed_np = fixed.cpu().squeeze().numpy()
             y_src_np = y_src.cpu().squeeze().numpy()
 
-            axes[0].imshow(moving_np[:, :, slice_idx], cmap='gray')
+            slice_idx = 90
+
+            # Imágenes axiales
+            axes[0].imshow(moving_np[:, :, slice_idx], cmap='gray', origin='upper')
             axes[0].set_title('Moving (Source) Image')
-
-            axes[1].imshow(fixed_np[:, :, slice_idx], cmap='gray')
+            axes[1].imshow(fixed_np[:, :, slice_idx], cmap='gray', origin='upper')
             axes[1].set_title('Fixed (Target) Image')
-
-            axes[2].imshow(y_src_np[:, :, slice_idx], cmap='gray')
+            axes[2].imshow(y_src_np[:, :, slice_idx], cmap='gray', origin='upper')
             axes[2].set_title('Registered Image')
-
             error = fixed_np[:, :, slice_idx] - y_src_np[:, :, slice_idx]
-            axes[3].imshow(error, cmap='gray')
+            axes[3].imshow(error, cmap='gray', origin='upper')
             axes[3].set_title('Error (Fixed - Registered)')
 
-            # Plotting the deformation grid for phi_inv (slice slice_idx)
-            ax = axes[4]
-            interval = 2
+            # Grid axial
+            phi_inv = new_locs[0].cpu().detach().numpy()  # [Z, Y, X, 3]
             slice_idx = 90
-            interval = 4  # puedes ajustar para ver más o menos líneas
 
-            phi_inv = new_locs[0,...].cpu().detach().numpy()  # shape: (Z, Y, X, 3)
-            phi_slice = phi_inv[slice_idx, :, :, :]       # (Y, X, 3) → axial
+            # AXIAL = plano XY = corte a lo largo de Z
+            phi_slice = phi_inv[:, :, slice_idx, :]       # shape: [Z, Y, 3]
+            H, W = phi_slice.shape[:2]                    # H (vertical), W (horizontal)
 
-            for row in range(0, phi_slice.shape[0], interval):  # sobre filas (Y)
-                ax.plot(
-                    phi_slice[row, :, 0],           # X'
-                    -phi_slice[row, :, 1],          # Y' (con flip vertical)
-                    'm'
-                )
+            x_grid = (phi_slice[..., 2] + 1) * (W - 1) / 2  # X = horizontal
+            y_grid = (phi_slice[..., 1] + 1) * (H - 1) / 2  # Y = vertical
 
-            for col in range(0, phi_slice.shape[1], interval):  # sobre columnas (X)
-                ax.plot(
-                    phi_slice[:, col, 0],           # X'
-                    -phi_slice[:, col, 1],          # Y'
-                    'm'
-                )
+            # Plot
+            ax = axes[4]
+            interval = 4
+            for row in range(0, H, interval):
+                ax.plot(x_grid[row, :], y_grid[row, :], 'm')
+            for col in range(0, W, interval):
+                ax.plot(x_grid[:, col], y_grid[:, col], 'm')
 
             ax.set_title(f'Deformation Grid (Axial slice {slice_idx})')
             ax.set_aspect('equal')
+            ax.set_xlim(0, W - 1)
+            ax.set_ylim(H - 1, 0)  # Flip Y-axis
             ax.grid(True)
-            plt.show()
 
-            
+
+
+
+
+            plt.tight_layout()
+            plt.show()
 
             
             #Plot the segmentation results
@@ -474,7 +473,7 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 net.train()
 logger.info('Starting training with random pairs of images')
 # random_training_dataloader(net, optimizer, num_epochs=2, train_images=train_data['images'], device=device, batch_size=8)
-random_training(net, optimizer, num_epochs=100, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+random_training(net, optimizer, num_epochs=70, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
 # logger.info('Starting training with fixed source and random moving images')
 # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

@@ -29,9 +29,7 @@ def random_training(net, optimizer, num_epochs, train_images, device, num_batche
     loss_per_epoch = []
 
     for epoch in range(num_epochs):
-        optimizer.zero_grad()
         epoch_loss = 0
-
         for batch in range(num_batches):
             # Use logger instead of print to avoid overlapping outputs
             print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch+1}/{num_batches}", end='\r')
@@ -166,17 +164,74 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
 
             # Visualize the 90th slice along the third axis (z-axis)
             slice_idx = 90
-            fig, axes = plt.subplots(1, 4, figsize=(18, 5))
+
+            # Plot images and deformation grid for slice 90
+            fig, axes = plt.subplots(1, 5, figsize=(25, 5))
             axes[0].imshow(moving.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[0].set_title('Moving Image (slice 90)')
+            axes[0].set_title('Source Image (Moving, slice 90)')
             axes[1].imshow(fixed.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[1].set_title('Fixed Image (slice 90)')
+            axes[1].set_title('Target Image (Fixed, slice 90)')
             axes[2].imshow(y_src.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
-            axes[2].set_title('Registered Image (slice 90)')
-            axes[3].imshow(warped_seg[:, :, slice_idx], cmap='gray')
-            axes[3].set_title('Warped Segmentation (slice 90)')
-            plt.tight_layout()
+            axes[2].set_title('Registered Image (y_src, slice 90)')
+            error = fixed.cpu().squeeze().numpy()[:, :, slice_idx] - y_src.cpu().squeeze().numpy()[:, :, slice_idx]
+            axes[3].imshow(error, cmap='gray')
+            axes[3].set_title('Error (Fixed - Registered, slice 90)')
+
+            # Plotting the deformation grid for phi_inv (slice 90)
+            ax = axes[4]
+            interval = 2
+            phi_inv = new_locs[0,...].cpu().detach().numpy()
+            interval = 2
+
+            # Slice plano XY
+            phi_slice = phi_inv[90, :, :, :]  # (H, W, 3)
+
+            for row in range(0, phi_slice.shape[0], interval):
+                ax.plot(
+                    phi_slice[row, :, 0],         # X deformado
+                    -phi_slice[row, :, 1],        # Y deformado (con flip vertical si quieres)
+                    'm'
+                )
+
+            for col in range(0, phi_slice.shape[1], interval):
+                ax.plot(
+                    phi_slice[:, col, 0],         # X deformado
+                    -phi_slice[:, col, 1],        # Y deformado
+                    'm'
+                )
+
+            ax.set_title('Deformation Grid - Axial Slice')
+            ax.set_aspect('equal')
+            plt.grid(True)
             plt.show()
+
+            # Another plot for the segmentation
+            fig, axes = plt.subplots(1, 4, figsize=(15, 5))
+            axes[0].imshow(moving_seg.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
+            axes[0].set_title('Source Segmentation (Moving, slice 90)')
+            axes[1].imshow(fixed_seg.cpu().squeeze().numpy()[:, :, slice_idx], cmap='gray')
+            axes[1].set_title('Target Segmentation (Fixed, slice 90)')
+            axes[2].imshow(warped_seg[:, :, slice_idx], cmap='gray')
+            axes[2].set_title('Warped Segmentation (slice 90)')
+            #error
+            fixed_slice = fixed_seg.cpu().squeeze().numpy()[:, :, slice_idx]
+            warped_slice = warped_seg[:, :, slice_idx]
+            # Resize warped_slice to match fixed_slice if needed
+            if fixed_slice.shape != warped_slice.shape:
+                from skimage.transform import resize
+                warped_slice_resized = resize(warped_slice, fixed_slice.shape, order=0, preserve_range=True, anti_aliasing=False).astype(warped_slice.dtype)
+            else:
+                warped_slice_resized = warped_slice
+            error_seg = fixed_slice - warped_slice_resized
+            axes[3].imshow(error_seg, cmap='gray')
+            axes[3].set_title('Segmentation Error (Fixed - Warped, slice 90)')
+            plt.show()
+
+
+            
+                        
+
+
 
 
 def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
@@ -222,7 +277,7 @@ def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
 
     spat_trans = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
 
-    with torch.cuda.amp.autocast('cuda'):
+    with torch.cuda.amp.autocast():
         warped_seg = spat_trans(I1_seg, phi_resized)
 
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
@@ -348,7 +403,7 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 
 net.train()
 logger.info('Starting training with random pairs of images')
-random_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+random_training(net, optimizer, num_epochs=20, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
 # logger.info('Starting training with fixed source and random moving images')
 # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

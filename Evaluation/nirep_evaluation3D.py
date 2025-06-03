@@ -426,16 +426,16 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             fixed_seg_axial = torch.flipud(torch.tensor(fixed_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
             # warped_seg_axial = torch.flipud(torch.tensor(warped_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
             warped_seg_axial = torch.flipud(torch.tensor(warped_seg_np[:, :, slice_idx].T, dtype=torch.float32)).numpy()
-            
+
             plt.figure(figsize=(15, 5))
             plt.subplot(1, 3, 1)
-            plt.imshow(moving_seg_axial, cmap='tab20')
+            plt.imshow(moving_seg_axial, cmap='gray')
             plt.title('Moving Segmentation (Axial, flipped)')
             plt.subplot(1, 3, 2)
-            plt.imshow(fixed_seg_axial, cmap='tab20')
+            plt.imshow(fixed_seg_axial, cmap='gray')
             plt.title('Fixed Segmentation (Axial, flipped)')
             plt.subplot(1, 3, 3)
-            plt.imshow(warped_seg_axial, cmap='tab20')
+            plt.imshow(warped_seg_axial, cmap='gray')
             plt.title('Warped Segmentation (Axial, flipped)')
             plt.show()
 

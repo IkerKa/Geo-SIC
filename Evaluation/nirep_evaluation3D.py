@@ -26,11 +26,12 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 class RandomPairDataset(Dataset):
-    def __init__(self, images):
+    def __init__(self, images, num_pairs=10000):
         self.images = images
+        self.npairs = num_pairs
 
     def __len__(self):
-        return 10000  # Número arbitrario de pares aleatorios por época
+        return self.npairs
 
     def __getitem__(self, idx):
         idx1 = np.random.randint(len(self.images))
@@ -42,8 +43,8 @@ class RandomPairDataset(Dataset):
         return img1, img2
 
 
-def random_training_dataloader(net, optimizer, num_epochs, train_images, device, batch_size=2, num_workers=0):
-    dataset = RandomPairDataset(train_images)
+def random_training_dataloader(net, optimizer, num_epochs, train_images, device, batch_size=2, num_workers=0, npairs=10000):
+    dataset = RandomPairDataset(train_images, num_pairs=npairs)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
     loss_per_epoch = []
     net.train()
@@ -67,15 +68,25 @@ def random_training_dataloader(net, optimizer, num_epochs, train_images, device,
             optimizer.step()
             epoch_loss += loss.item()
 
-            # To limit 
-            if batch_idx >= 5:
-                break
+            # # To limit 
+            # if batch_idx >= 5:
+            #     break
 
         mean_loss = epoch_loss / (batch_idx + 1)
         loss_per_epoch.append(mean_loss)
         logger.info(f"Epoch {epoch+1}/{num_epochs} - Loss: {mean_loss:.4f}")
 
     logger.info(f"Training completed. Mean loss per epoch: {np.mean(loss_per_epoch):.4f}")
+
+    #plotear la loss por epoch
+    plt.figure()
+    plt.plot(range(1, num_epochs + 1), loss_per_epoch, marker='o')
+    plt.title('Training Loss per Epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    plt.show()
+
 
 def random_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
     loss_per_epoch = []
@@ -346,8 +357,7 @@ def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
 
     spat_trans = SpatialTransformer(size=I1_seg.shape[2:], mode='nearest').to(dev)
 
-    with torch.cuda.amp.autocast():
-        warped_seg = spat_trans(I1_seg, phi_resized)
+    warped_seg = spat_trans(I1_seg, phi_resized)
 
     warped_seg_np = warped_seg.squeeze().cpu().detach().numpy()
     fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy()
@@ -472,8 +482,23 @@ net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device
 
 net.train()
 logger.info('Starting training with random pairs of images')
-# random_training_dataloader(net, optimizer, num_epochs=2, train_images=train_data['images'], device=device, batch_size=8)
-random_training(net, optimizer, num_epochs=70, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+# random_training_dataloader(net, optimizer, num_epochs=2, train_images=train_data['images'], device=device, batch_size=8, npairs=5)
+#print number of cores available 
+logger.info(f'Number of available CPU cores: {torch.get_num_threads()}')
+#Kill all the zombies
+
+
+
+random_training_dataloader(
+    net, optimizer,
+    num_epochs=15,
+    train_images=train_data['images'],
+    device=device,
+    batch_size=2,
+    num_workers=8,
+    npairs=46
+)
+# random_training(net, optimizer, num_epochs=70, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
 # logger.info('Starting training with fixed source and random moving images')
 # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

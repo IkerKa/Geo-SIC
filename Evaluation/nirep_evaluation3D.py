@@ -42,7 +42,87 @@ class RandomPairDataset(Dataset):
         img2 = self.images[idx2].squeeze(0).squeeze(0)
         return img1, img2
 
+#class for selected training
+class SelectedPairDataset(Dataset):
+    def __init__(self, images, fixed_idx, num_pairs=10000):
+        self.images = images
+        self.fixed_idx = fixed_idx
+        self.npairs = num_pairs
 
+    def __len__(self):
+        return self.npairs
+
+    def __getitem__(self, idx):
+        moving_idx = np.random.randint(len(self.images))
+        while moving_idx == self.fixed_idx:
+            moving_idx = np.random.randint(len(self.images))
+        img_fixed = self.images[self.fixed_idx].squeeze(0).squeeze(0)  # [D, H, W]
+        img_moving = self.images[moving_idx].squeeze(0).squeeze(0)
+        return img_fixed, img_moving
+
+def test_datasets():
+    # Test the RandomPairDataset and SelectedPairDataset classes by printing the indexes of the images
+    images = [torch.randn(1, 1, 64, 64, 64) for _ in range(10)]  # Simulated images
+    random_dataset = RandomPairDataset(images, num_pairs=5)
+    selected_dataset = SelectedPairDataset(images, fixed_idx=0, num_pairs=5)
+    print("Random Pair Dataset:")
+    for i in range(len(random_dataset)):
+        # Get the random indices used for this pair
+        idx1 = np.random.randint(len(images))
+        idx2 = np.random.randint(len(images))
+        while idx2 == idx1:
+            idx2 = np.random.randint(len(images))
+        print(f"Pair {i}: Index1={idx1}, Index2={idx2}")
+    print("\nSelected Pair Dataset:")
+    for i in range(len(selected_dataset)):
+        moving_idx = np.random.randint(len(images))
+        while moving_idx == selected_dataset.fixed_idx:
+            moving_idx = np.random.randint(len(images))
+        print(f"Pair {i}: Fixed Index={selected_dataset.fixed_idx}, Moving Index={moving_idx}")
+def debug_plotting():
+    # Plot from the images dataset an image and its segmentation
+    data = load_all_data('Baseline/NIREP_Matlab/', 'NIREP_3D')
+    data['images'] = [rescale_image(img) for img in data['images']]
+
+    # Convert images and segmentations to tensors
+    data_tensors = {
+        'images': [convert_to_tensor(img) for img in data['images']],
+        'segmentations': [convert_to_tensor(seg) for seg in data['segmentations']]
+    }
+
+    # Select the first image and its segmentation
+    img = data_tensors['images'][0].squeeze().numpy()  # Convert tensor to numpy array
+    seg = data_tensors['segmentations'][0].squeeze().numpy()
+
+    logger.info(f'Image shape: {img.shape}, Segmentation shape: {seg.shape}')
+    slice_idx = 90
+    logger.divider('Slicing the 3D volume')
+
+    # Transpose and flip to fix the orientation for the image
+    img_axial = img[:, :, slice_idx].T
+    seg_axial = seg[:, :, slice_idx].T
+
+    img_axial = np.flipud(img_axial)
+
+    # Extract the 2D axial slice and adjust orientation for the segmentation
+    aslice = 0.7
+    fixed_seg = torch.flipud(torch.tensor(seg[:, :, round(slice_idx / aslice)].T, dtype=torch.float32))
+    # If you have a moving segmentation, you can do similar:
+    # fixed_mov = torch.flipud(torch.tensor(segmentation_moving[:, :, round(slice_idx / aslice)].T, dtype=torch.float32))
+
+    
+
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img_axial, cmap='gray')
+    plt.title('Image Slice at Z=90 (Axial, flipped)')
+    plt.subplot(1, 2, 2)
+    plt.imshow(fixed_seg, cmap='tab20')
+    plt.title('Segmentation Slice at Z=90 (Axial, flipped)')
+    plt.show()
+
+
+### DATASET TRAINING FUNCTIONS ###
 def random_training_dataloader(net, optimizer, num_epochs, train_images, device, batch_size=2, num_workers=0, npairs=10000):
     dataset = RandomPairDataset(train_images, num_pairs=npairs)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
@@ -87,7 +167,50 @@ def random_training_dataloader(net, optimizer, num_epochs, train_images, device,
     plt.grid(True)
     plt.show()
 
+def selected_training_dataloader(net, optimizer, num_epochs, train_images, device, batch_size=2, num_workers=0, npairs=10000):
+    """
+    Different index per epoch, but same fixed index for all pairs in the epoch.
+    """
+    loss_per_epoch = []
+    net.train()
 
+    for epoch in range(num_epochs):
+
+        fixed_idx = np.random.randint(len(train_images))
+        dataset = SelectedPairDataset(train_images, fixed_idx=fixed_idx, num_pairs=npairs)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+
+        epoch_loss = 0
+        for batch_idx, (fixed_batch, moving_batch) in enumerate(loader):
+            print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx+1}/{len(loader)}, Fixed idx: {fixed_idx}", end='\r')
+            fixed_batch = fixed_batch.unsqueeze(1).to(device)    # [batch, 1, D, H, W]
+            moving_batch = moving_batch.unsqueeze(1).to(device)
+
+            optimizer.zero_grad()
+            y_src, momentum, _, _ = net(moving_batch, fixed_batch, registration=True, shooting="SVF", return_phi=True)
+            Dist = config.NCC().loss(y_src, fixed_batch)
+            Reg = config.Grad(penalty='l2')
+            loss = Dist + Reg.loss(momentum)
+
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+
+        mean_loss = epoch_loss / (batch_idx + 1)
+        loss_per_epoch.append(mean_loss)
+        logger.info(f"Epoch {epoch+1}/{num_epochs} (fixed_idx={fixed_idx}) - Loss: {mean_loss:.4f}")
+
+    logger.info(f"Training completed. Mean loss per epoch: {np.mean(loss_per_epoch):.4f}")
+
+    plt.figure()
+    plt.plot(range(1, num_epochs + 1), loss_per_epoch, marker='o')
+    plt.title('Training Loss per Epoch (Selected Pair)')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    plt.show()
+
+### HANDMADE TRAINING FUNCTIONS ###
 def random_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
     loss_per_epoch = []
     net.train()
@@ -195,6 +318,7 @@ def selected_training(net, optimizer, num_epochs, train_images, device, num_batc
     ax.grid(True)
     plt.show()
 
+### INFERENCE FUNCTIONS ###
 def net_test_model_3d(net, test_dataset, save_phi, device):
     """
     Test the registration network on a 3D test dataset.
@@ -240,40 +364,47 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
 
             slice_idx = 90
 
-            # Imágenes axiales
-            axes[0].imshow(moving_np[:, :, slice_idx], cmap='gray', origin='upper')
+            # Prepare axial slices with orientation adjustment (transpose + flipud)
+            moving_axial = np.flipud(moving_np[:, :, slice_idx].T)
+            fixed_axial = np.flipud(fixed_np[:, :, slice_idx].T)
+            y_src_axial = np.flipud(y_src_np[:, :, slice_idx].T)
+            error_axial = fixed_axial - y_src_axial
+
+            axes[0].imshow(moving_axial, cmap='gray', origin='upper')
             axes[0].set_title('Moving (Source) Image')
-            axes[1].imshow(fixed_np[:, :, slice_idx], cmap='gray', origin='upper')
+            axes[1].imshow(fixed_axial, cmap='gray', origin='upper')
             axes[1].set_title('Fixed (Target) Image')
-            axes[2].imshow(y_src_np[:, :, slice_idx], cmap='gray', origin='upper')
+            axes[2].imshow(y_src_axial, cmap='gray', origin='upper')
             axes[2].set_title('Registered Image')
-            error = fixed_np[:, :, slice_idx] - y_src_np[:, :, slice_idx]
-            axes[3].imshow(error, cmap='gray', origin='upper')
+            axes[3].imshow(error_axial, cmap='gray', origin='upper')
             axes[3].set_title('Error (Fixed - Registered)')
 
             # Grid axial
             phi_inv = new_locs[0].cpu().detach().numpy()  # [Z, Y, X, 3]
-            slice_idx = 90
 
             # AXIAL = plano XY = corte a lo largo de Z
             phi_slice = phi_inv[:, :, slice_idx, :]       # shape: [Z, Y, 3]
             H, W = phi_slice.shape[:2]                    # H (vertical), W (horizontal)
 
+            # Compute grid coordinates (no rotation, just transpose to match image orientation)
             x_grid = (phi_slice[..., 2] + 1) * (W - 1) / 2  # X = horizontal
             y_grid = (phi_slice[..., 1] + 1) * (H - 1) / 2  # Y = vertical
 
-            # Plot
+            # Transpose to match image orientation (like images)
+            x_grid_t = x_grid.T
+            y_grid_t = y_grid.T
+
             ax = axes[4]
             interval = 4
-            for row in range(0, H, interval):
-                ax.plot(x_grid[row, :], y_grid[row, :], 'm')
-            for col in range(0, W, interval):
-                ax.plot(x_grid[:, col], y_grid[:, col], 'm')
+            for row in range(0, x_grid_t.shape[0], interval):
+                ax.plot(x_grid_t[row, :], y_grid_t[row, :], 'm')
+            for col in range(0, x_grid_t.shape[1], interval):
+                ax.plot(x_grid_t[:, col], y_grid_t[:, col], 'm')
 
             ax.set_title(f'Deformation Grid (Axial slice {slice_idx})')
             ax.set_aspect('equal')
             ax.set_xlim(0, W - 1)
-            ax.set_ylim(H - 1, 0)  # Flip Y-axis
+            ax.set_ylim(0, H - 1)
             ax.grid(True)
 
 
@@ -283,36 +414,30 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             plt.tight_layout()
             plt.show()
 
+            # plot segmentations
+            # Prepare segmentations for plotting (transpose + flipud for correct orientation)
+            moving_seg_np = moving_seg.cpu().squeeze().numpy()
+            fixed_seg_np = fixed_seg.cpu().squeeze().numpy()
+            warped_seg_np = warped_seg
+
+            # For correct orientation, transpose and flipud (like images)
+            aslice = 0.7
+            moving_seg_axial = torch.flipud(torch.tensor(moving_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
+            fixed_seg_axial = torch.flipud(torch.tensor(fixed_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
+            # warped_seg_axial = torch.flipud(torch.tensor(warped_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
+            warped_seg_axial = torch.flipud(torch.tensor(warped_seg_np[:, :, slice_idx].T, dtype=torch.float32)).numpy()
             
-            #Plot the segmentation results
-            # fig, axes = plt.subplots(1, 4, figsize=(15, 5))
-            # moving_seg_np = moving_seg.cpu().squeeze().numpy()
-            # fixed_seg_np = fixed_seg.cpu().squeeze().numpy()
-            # warped_seg_np = warped_seg
-
-            # axes[0].imshow(moving_seg_np[:, :, slice_idx], cmap='gray')
-            # axes[0].set_title('Moving Segmentation')
-            # axes[1].imshow(fixed_seg_np[:, :, slice_idx], cmap='gray')
-            # axes[1].set_title('Fixed Segmentation')
-            # axes[2].imshow(warped_seg_np[:, :, slice_idx], cmap='gray')
-            # axes[2].set_title('Warped Segmentation')
-
-            # if warped_seg_np.shape != fixed_seg_np.shape:
-            #     #Resize warped_seg to match fixed_seg
-            #     from skimage.transform import resize
-            #     warped_seg_np = resize(warped_seg_np, fixed_seg_np.shape, order=0, preserve_range=True, anti_aliasing=False)
-            
-            # error_seg = fixed_seg_np - warped_seg_np
-            # axes[3].imshow(error_seg[:, :, slice_idx], cmap='gray')
-            # axes[3].set_title('Segmentation Error (Fixed - Warped)')
-            # plt.tight_layout()
-            # plt.show()
-
-            
-                        
-
-
-
+            plt.figure(figsize=(15, 5))
+            plt.subplot(1, 3, 1)
+            plt.imshow(moving_seg_axial, cmap='tab20')
+            plt.title('Moving Segmentation (Axial, flipped)')
+            plt.subplot(1, 3, 2)
+            plt.imshow(fixed_seg_axial, cmap='tab20')
+            plt.title('Fixed Segmentation (Axial, flipped)')
+            plt.subplot(1, 3, 3)
+            plt.imshow(warped_seg_axial, cmap='tab20')
+            plt.title('Warped Segmentation (Axial, flipped)')
+            plt.show()
 
 def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
     print(f"Original phi_inv shape: {phi_inv.shape}")
@@ -378,7 +503,7 @@ def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
 
     return warped_seg_np, fixed_seg_np, dice_mean, dice_median
 
-
+### AUXILIARY FUNCTIONS ###
 def pad_to_multiple(tensor, multiple=16):
     # tensor shape: (1, 1, D, H, W)
     _, _, d, h, w = tensor.shape
@@ -421,93 +546,125 @@ def load_all_data(dataset_path, dataset_name):
     return data
 
 
+
+### MAIN FUNCTION ###
+
 logger = Logger('NIREP_3D.log')
 
-dataset_path = 'Baseline/NIREP_Matlab/'
+def main():
 
-logger.divider('Loading all the 3D images and segmentations')
+    dataset_path = 'Baseline/NIREP_Matlab/'
 
-data = load_all_data(dataset_path, 'NIREP_3D')
+    logger.divider('Loading all the 3D images and segmentations')
 
-# Re-scale images to [0, 1]
-data['images'] = [rescale_image(img) for img in data['images']]
+    data = load_all_data(dataset_path, 'NIREP_3D')
 
-# Convert images and segmentations to tensors
-data_tensors = {
-    'images': [convert_to_tensor(img) for img in data['images']],
-    'segmentations': [convert_to_tensor(seg) for seg in data['segmentations']]
-}
+    # Re-scale images to [0, 1]
+    data['images'] = [rescale_image(img) for img in data['images']]
 
-
-logger.info(f'Number of images loaded: {len(data["images"])}')
-
-
-test_data = {'images': data_tensors['images'][:2], 'segmentations': data_tensors['segmentations'][:2]}
-train_data = {'images': data_tensors['images'][2:12], 'segmentations': data_tensors['segmentations'][2:12]}
-val_data = {'images': data_tensors['images'][12:14], 'segmentations': data_tensors['segmentations'][12:14]}
-
-logger.info(f'Training set size: {len(train_data["images"])}')
-logger.info(f'Validation set size: {len(val_data["images"])}')
-logger.info(f'Test set size: {len(test_data["images"])}')
-
-### Debug: Check the shapes of the tensors and plot the first image
-
-# i = 0  # Index of the first training image
-# img = train_data['images'][i].numpy()  # Convert tensor to numpy array
-# logger.info(f'Train image {i} shape: {img.shape}')
-# plt.imshow(img[:, :, slice_idx], cmap='gray')
-# plt.title('First Training Image Slice')
-# plt.show()
+    # Convert images and segmentations to tensors
+    data_tensors = {
+        'images': [convert_to_tensor(img) for img in data['images']],
+        'segmentations': [convert_to_tensor(seg) for seg in data['segmentations']]
+    }
 
 
-### Image registration
-
-# To register the images we will train with a set of images using N batches where for each batch we will have two options:
-# 1. Use random pairs of images from the training set.
-# 2. For each batch, take a fixed source and random moving ones
-
-# Add batch dimensions !!!! CUIDADO CON ESTA PARTE !!!! (imagino que necesario para que la red funcione correctamente)
-logger.info('Shape of images before padding: ' + str(train_data['images'][0].shape))
-train_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in train_data['images']]
-train_data['images'] = [pad_to_multiple(img) for img in train_data['images']]
-test_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in test_data['images']]
-test_data['images'] = [pad_to_multiple(img) for img in test_data['images']]
-logger.info('Shape of images after padding: ' + str(train_data['images'][0].shape))
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-para = read_yaml('parameters.yml')
-
-xDim, yDim, zDim = train_data['images'][0].shape[2:5]
-net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device)
-
-net.train()
-logger.info('Starting training with random pairs of images')
-# random_training_dataloader(net, optimizer, num_epochs=2, train_images=train_data['images'], device=device, batch_size=8, npairs=5)
-#print number of cores available 
-logger.info(f'Number of available CPU cores: {torch.get_num_threads()}')
-#Kill all the zombies
+    logger.info(f'Number of images loaded: {len(data["images"])}')
 
 
+    test_data = {'images': data_tensors['images'][:2], 'segmentations': data_tensors['segmentations'][:2]}
+    train_data = {'images': data_tensors['images'][2:12], 'segmentations': data_tensors['segmentations'][2:12]}
+    val_data = {'images': data_tensors['images'][12:14], 'segmentations': data_tensors['segmentations'][12:14]}
 
-random_training_dataloader(
-    net, optimizer,
-    num_epochs=15,
-    train_images=train_data['images'],
-    device=device,
-    batch_size=2,
-    num_workers=8,
-    npairs=46
-)
-# random_training(net, optimizer, num_epochs=70, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
-# logger.info('Starting training with fixed source and random moving images')
-# selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
+    logger.info(f'Training set size: {len(train_data["images"])}')
+    logger.info(f'Validation set size: {len(val_data["images"])}')
+    logger.info(f'Test set size: {len(test_data["images"])}')
 
-#Evaluation
-logger.info('Testing the trained model on the test dataset')
-net.eval()
-net_test_model_3d(net, test_dataset=test_data, save_phi=False, device=device)
+    ### Debug: Check the shapes of the tensors and plot the first image
+
+    # i = 0  # Index of the first training image
+    # img = train_data['images'][i].numpy()  # Convert tensor to numpy array
+    # logger.info(f'Train image {i} shape: {img.shape}')
+    # plt.imshow(img[:, :, slice_idx], cmap='gray')
+    # plt.title('First Training Image Slice')
+    # plt.show()
 
 
+    ### Image registration
+
+    # To register the images we will train with a set of images using N batches where for each batch we will have two options:
+    # 1. Use random pairs of images from the training set.
+    # 2. For each batch, take a fixed source and random moving ones
+
+    # Add batch dimensions !!!! CUIDADO CON ESTA PARTE !!!! (imagino que necesario para que la red funcione correctamente)
+    logger.info('Shape of images before padding: ' + str(train_data['images'][0].shape))
+    train_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in train_data['images']]
+    train_data['images'] = [pad_to_multiple(img) for img in train_data['images']]
+    test_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in test_data['images']]
+    test_data['images'] = [pad_to_multiple(img) for img in test_data['images']]
+    logger.info('Shape of images after padding: ' + str(train_data['images'][0].shape))
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    para = read_yaml('parameters.yml')
+
+    xDim, yDim, zDim = train_data['images'][0].shape[2:5]
+    net, _ , optimizer = initialize_network_optimizer(xDim, yDim, zDim, para, device)
+
+    net.train()
+    logger.info(f'Number of available CPU cores: {torch.get_num_threads()}')
+    
+
+    ### Training with dataloaders ###
+
+    # random_training_dataloader(
+    #     net, optimizer,
+    #     num_epochs=15,
+    #     train_images=train_data['images'],
+    #     device=device,
+    #     batch_size=2,
+    #     num_workers=8,
+    #     npairs=46
+    # )
+
+    # selected_training_dataloader(
+    #     net, optimizer,
+    #     num_epochs=15,
+    #     train_images=train_data['images'],
+    #     device=device,
+    #     batch_size=2,
+    #     num_workers=8,
+    #     npairs=46
+    # )
+
+    ### Quick debug training
+    selected_training_dataloader(
+        net, optimizer,
+        num_epochs=1,
+        train_images=train_data['images'],
+        device=device,
+        batch_size=2,
+        num_workers=4,
+        npairs=10
+    )
+
+
+    ### Training with handmade functions ###
+    # random_training(net, optimizer, num_epochs=70, train_images=train_data['images'], device=device, num_batches=1, batch_size=1)
+    # logger.info('Starting training with fixed source and random moving images')
+    # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
+
+    #Evaluation
+    logger.info('Testing the trained model on the test dataset')
+    net.eval()
+    net_test_model_3d(net, test_dataset=test_data, save_phi=False, device=device)
+
+if __name__ == "__main__":
+    _test = False
+    if _test:
+        test_datasets()
+        debug_plotting()
+    else:
+        main()
 
 
 

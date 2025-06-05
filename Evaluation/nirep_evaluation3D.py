@@ -212,8 +212,12 @@ def selected_training_dataloader(net, optimizer, num_epochs, train_images, devic
     plt.show()
 
 ### HANDMADE TRAINING FUNCTIONS ###
-def random_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
+def random_training(net, optimizer, num_epochs, train_data, device, num_batches=5, batch_size=2, val_data=None):
     loss_per_epoch = []
+    dice_per_epoch = []
+
+    train_images = train_data['images']
+    train_segmentations = train_data['segmentations']
     net.train()
 
     for epoch in range(num_epochs):
@@ -229,15 +233,24 @@ def random_training(net, optimizer, num_epochs, train_images, device, num_batche
                     moving_idx = np.random.randint(len(train_images))
 
                 source_image = train_images[source_idx].to(device)
+                source_segmentation = train_segmentations[source_idx].to(device)
                 moving_image = train_images[moving_idx].to(device)
+                moving_segmentation = train_segmentations[moving_idx].to(device)
 
-                y_src, momentum, _, _ = net(moving_image, source_image, registration=True, shooting="SVF", return_phi=True)
-                
+                y_src, momentum, _, new_locs = net(moving_image, source_image, registration=True, shooting="SVF", return_phi=True)
 
                 Dist = config.NCC().loss(y_src, source_image)
                 Reg = config.Grad(penalty='l2')
-                loss = Dist + 0.01 * Reg.loss(momentum)
-                (loss / batch_size).backward() 
+                # warped_moving_seg, _, _, _ = customSegmentation(moving_segmentation, new_locs[0], source_segmentation, device)
+
+                # warped_moving_seg_tensor = torch.tensor(warped_moving_seg, dtype=torch.float32, device=device)
+                # source_segmentation_tensor = source_segmentation.squeeze().float().to(device)
+
+                # seg_substraction = warped_moving_seg_tensor - source_segmentation_tensor
+                # seg_loss = torch.mean(seg_substraction ** 2)
+
+                loss = Dist + 0.005 * Reg.loss(momentum)# + 0.1 * seg_loss
+                (loss / batch_size).backward()
                 batch_loss += loss.item()
 
             optimizer.step()
@@ -247,19 +260,48 @@ def random_training(net, optimizer, num_epochs, train_images, device, num_batche
         mean_loss = epoch_loss / num_batches
         loss_per_epoch.append(mean_loss)
 
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            logger.info(f"Epoch {epoch+1}/{num_epochs} - Loss: {mean_loss:.4f}")
+        if val_data is not None:
+            net.eval()
+            dices = []
+            with torch.no_grad():
+                for i in range(0, len(val_data['images']), 2):
+                    if i+1 >= len(val_data['images']):
+                        break
+                    fixed = val_data['images'][i].to(device).float()
+                    moving = val_data['images'][i+1].to(device).float()
+                    fixed_seg = val_data['segmentations'][i].to(device).float()
+                    moving_seg = val_data['segmentations'][i+1].to(device).float()
+                    y_src, _, _, new_locs = net(moving, fixed, registration=True, shooting='SVF', return_phi=True)
+                    warped_seg, _, dice_mean, _ = customSegmentation(moving_seg, new_locs[0], fixed_seg, device)
+                    dices.append(dice_mean)
+            mean_dice = np.mean(dices)
+            dice_per_epoch.append(mean_dice)
+            logger.info(f"Epoch {epoch+1}/{num_epochs} - Loss: {mean_loss:.4f} - Val Dice: {mean_dice:.4f}")
+            net.train()
+        else:
+            dice_per_epoch.append(np.nan)
 
     logger.info(f"Training completed. Mean loss per epoch: {np.mean(loss_per_epoch):.4f}")
 
-    # Plot
+    # Plot loss
+    # Plot loss per epoch
     plt.figure()
-    plt.plot(range(1, num_epochs + 1), loss_per_epoch, marker='o')
+    plt.plot(range(1, num_epochs + 1), loss_per_epoch, marker='o', label='Loss')
     plt.title('Training Loss per Epoch')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.grid(True)
     plt.show()
+
+    # Plot validation Dice per epoch (if available)
+    if val_data is not None:
+        plt.figure()
+        plt.plot(range(1, num_epochs + 1), dice_per_epoch, marker='x', label='Val Dice', color='orange')
+        plt.title('Validation Dice per Epoch')
+        plt.xlabel('Epoch')
+        plt.ylabel('Dice')
+        plt.grid(True)
+        plt.show()
 
 def selected_training(net, optimizer, num_epochs, train_images, device, num_batches=5, batch_size=2):
     loss_per_epoch = []
@@ -344,7 +386,7 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             print("phi_inv stats: min", new_locs[0].min().item(), "max", new_locs[0].max().item(), "mean", new_locs[0].mean().item())
             print("phi_inv[0,0,0]:", new_locs[0][0,0,0].cpu().numpy())
 
-            warped_seg, _, dice_mean, dice_median = customSegmentation(moving_seg, new_locs[0], fixed_seg, device, True)
+            warped_seg, _, dice_mean, dice_median = customSegmentation(moving_seg, new_locs[0], fixed_seg, device)
             phis.append(new_locs[0].cpu())
 
             # Optionally, compute SSIM and RMSE 
@@ -410,10 +452,6 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             ax.set_ylim(0, H - 1)
             ax.grid(True)
 
-
-
-
-
             plt.tight_layout()
             plt.show()
 
@@ -429,9 +467,10 @@ def net_test_model_3d(net, test_dataset, save_phi, device):
             fixed_seg_axial = torch.flipud(torch.tensor(fixed_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
             # warped_seg_axial = torch.flipud(torch.tensor(warped_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
             warped_seg_axial = torch.flipud(torch.tensor(warped_seg_np[:, :, round(slice_idx / aslice)].T, dtype=torch.float32)).numpy()
-            # target_shape = fixed_seg_axial.shape
-            # if warped_seg_axial.shape != target_shape:
-            #     warped_seg_axial = resize(warped_seg_axial, target_shape, order=0, preserve_range=True, anti_aliasing=False)
+            
+            target_shape = fixed_seg_axial.shape
+            if warped_seg_axial.shape != target_shape:
+                warped_seg_axial = resize(warped_seg_axial, target_shape, order=0, preserve_range=True, anti_aliasing=False)
 
             plt.figure(figsize=(20, 5))
             plt.subplot(1, 4, 1)
@@ -491,9 +530,6 @@ def customSegmentation_segmentations(I1_seg, phi_inv, I2_seg, dev):
     if I2_seg.shape[-3:] != target_shape:
         I2_seg = F.interpolate(I2_seg.float(), size=target_shape, mode='nearest')
 
-    print("I1_seg shape:", I1_seg.shape)
-    print("phi_inv shape:", phi_inv.shape)
-
     # Warping
     
     phi_inv_for_st = phi_inv.permute(0, 4, 1, 2, 3).contiguous()
@@ -514,7 +550,7 @@ def customSegmentation_segmentations(I1_seg, phi_inv, I2_seg, dev):
 
     return warped_seg_np, fixed_seg_np, dice_mean, dice_median
 
-def customSegmentation(I1_seg, phi_inv, I2_seg, dev, test_artificial_warp=False):
+def customSegmentation(I1_seg, phi_inv, I2_seg, dev):
     """
     Warps the moving segmentation using the deformation field and computes Dice scores.
     Args:
@@ -566,23 +602,9 @@ def customSegmentation(I1_seg, phi_inv, I2_seg, dev, test_artificial_warp=False)
     if I2_seg.shape[-3:] != target_shape:
         I2_seg = F.interpolate(I2_seg.float(), size=target_shape, mode='nearest')
 
-    # Debug prints
-    print(f"I1_seg shape: {I1_seg.shape}, I2_seg shape: {I2_seg.shape}, phi_inv shape: {phi_inv.shape}")
-    print(f"phi_inv min/max: {phi_inv.min().item():.4f}/{phi_inv.max().item():.4f}")
-
-    # --- ARTIFICIAL WARP TEST ---
-    # if test_artificial_warp:
-    #     D, H, W = target_shape
-    #     identity_grid = torch.stack(torch.meshgrid(
-    #         torch.linspace(-1, 1, D),
-    #         torch.linspace(-1, 1, H),
-    #         torch.linspace(-1, 1, W),
-    #         indexing='ij'
-    #     ), dim=-1).unsqueeze(0).to(dev)  # [1, D, H, W, 3]
-    #     shift = 2.0 / (W - 1)  # 1 voxel in X
-    #     phi_inv = identity_grid.clone()
-    #     phi_inv[..., 2] = torch.clamp(phi_inv[..., 2] + shift, -1, 1)
-    #     print("Using artificial shift field for debugging.")
+    # # Debug prints
+    # print(f"I1_seg shape: {I1_seg.shape}, I2_seg shape: {I2_seg.shape}, phi_inv shape: {phi_inv.shape}")
+    # print(f"phi_inv min/max: {phi_inv.min().item():.4f}/{phi_inv.max().item():.4f}")
 
     # Warping
     phi_inv_for_st = phi_inv.permute(0, 4, 1, 2, 3)
@@ -593,9 +615,9 @@ def customSegmentation(I1_seg, phi_inv, I2_seg, dev, test_artificial_warp=False)
     fixed_seg_np = I2_seg.squeeze().cpu().detach().numpy().astype(np.uint8)
 
     # Print unique labels for debugging
-    print("Unique labels in fixed segmentation:", np.unique(fixed_seg_np))
-    print("Unique labels in warped segmentation:", np.unique(warped_seg_np))
-    print("Are warped and moving segmentations equal?", np.array_equal(warped_seg_np, I1_seg.squeeze().cpu().numpy()))
+    # print("Unique labels in fixed segmentation:", np.unique(fixed_seg_np))
+    # print("Unique labels in warped segmentation:", np.unique(warped_seg_np))
+    # print("Are warped and moving segmentations equal?", np.array_equal(warped_seg_np, I1_seg.squeeze().cpu().numpy()))
 
     # Use only labels present in either segmentation, excluding background (0)
     labels = np.unique(np.concatenate([fixed_seg_np, warped_seg_np]))
@@ -707,6 +729,8 @@ def main():
     logger.info('Shape of images before padding: ' + str(train_data['images'][0].shape))
     train_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in train_data['images']]
     train_data['images'] = [pad_to_multiple(img) for img in train_data['images']]
+    val_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in val_data['images']]
+    val_data['images'] = [pad_to_multiple(img) for img in val_data['images']]
     test_data['images'] = [img.unsqueeze(0).unsqueeze(0) for img in test_data['images']]
     test_data['images'] = [pad_to_multiple(img) for img in test_data['images']]
     logger.info('Shape of images after padding: ' + str(train_data['images'][0].shape))
@@ -758,7 +782,8 @@ def main():
 
 
     ### Training with handmade functions ###
-    random_training(net, optimizer, num_epochs=1, train_images=train_data['images'], device=device, num_batches=10, batch_size=1)
+    # random_training(net, optimizer, num_epochs=1, train_images=train_data['images'], device=device, num_batches=10, batch_size=1)
+    random_training(net, optimizer, num_epochs=200, train_data=train_data, device=device, num_batches=15, batch_size=1, val_data=val_data)
     # logger.info('Starting training with fixed source and random moving images')
     # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

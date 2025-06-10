@@ -783,7 +783,7 @@ def main():
 
     ### Training with handmade functions ###
     # random_training(net, optimizer, num_epochs=1, train_images=train_data['images'], device=device, num_batches=10, batch_size=1)
-    random_training(net, optimizer, num_epochs=200, train_data=train_data, device=device, num_batches=15, batch_size=1, val_data=val_data)
+    random_training(net, optimizer, num_epochs=10, train_data=train_data, device=device, num_batches=10, batch_size=1, val_data=val_data)
     # logger.info('Starting training with fixed source and random moving images')
     # selected_training(net, optimizer, num_epochs=10, train_images=train_data['images'], device=device, num_batches=3, batch_size=1)
 

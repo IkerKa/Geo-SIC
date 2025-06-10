@@ -51,6 +51,7 @@ def custom_training(net, optimizer, num_epochs, fixed, moving, device):
     loss_total = 0
     phi_inv = None
     ssim_per_epoch, loss_per_epoch = [], []
+    rmse_per_epoch = []
     
     tqdm_epochs = config.tqdm.tqdm(total=num_epochs, desc="Training Progress", leave=False)
     for epoch in range(num_epochs):
@@ -59,6 +60,7 @@ def custom_training(net, optimizer, num_epochs, fixed, moving, device):
 
         pair_loss = []
         pair_ssim = []
+        pair_rmse = []
 
 
         I1 = moving
@@ -82,17 +84,48 @@ def custom_training(net, optimizer, num_epochs, fixed, moving, device):
         pair_loss.append(loss_total.item())
         pair_ssim.append(config.ssim(y_src.squeeze().cpu().detach().numpy(), I2.squeeze().cpu().detach().numpy(),
                                 data_range=I2.squeeze().cpu().detach().numpy().max() - I2.squeeze().cpu().detach().numpy().min()))
+        pair_rmse.append(config.np.sqrt(config.np.mean((I2.squeeze().cpu().detach().numpy() - y_src.squeeze().cpu().detach().numpy()) ** 2)))
+        
 
         with torch.no_grad():
             phi_inv = new_locs[0,...]
        
         mean_loss = config.np.mean(pair_loss)
         mean_ssim = config.np.mean(pair_ssim)
+        mean_rmse = config.np.mean(pair_rmse)
         loss_per_epoch.append(mean_loss)
         ssim_per_epoch.append(mean_ssim)
+        rmse_per_epoch.append(mean_rmse)
 
 
         tqdm_epochs.set_postfix(loss=mean_loss, ssim=mean_ssim)
+
+
+    #plot the metrics
+    config.plt.figure(figsize=(10, 5))
+    config.plt.subplot(1, 3, 1)
+    config.plt.plot(loss_per_epoch, label='Loss')
+    config.plt.title('Loss per Epoch')
+    config.plt.xlabel('Epoch')
+    config.plt.ylabel('Loss')
+    config.plt.legend()
+    config.plt.subplot(1, 3, 2)
+    config.plt.plot(ssim_per_epoch, label='SSIM', color='orange')
+    config.plt.title('SSIM per Epoch')
+    config.plt.xlabel('Epoch')
+    config.plt.ylabel('SSIM')
+    config.plt.legend()
+    config.plt.subplot(1, 3, 3)
+    config.plt.plot(rmse_per_epoch, label='RMSE', color='green')
+    config.plt.title('RMSE per Epoch')
+    config.plt.xlabel('Epoch')
+    config.plt.ylabel('RMSE')
+    config.plt.legend()
+    config.plt.tight_layout()
+    config.plt.show()
+
+
+    
 
 def pad_to_multiple(tensor, multiple=16):
     _, _, h, w = tensor.shape
@@ -378,7 +411,7 @@ net.eval()
 net_test_model(net, fixed=target, moving=source, fixed_seg=fixed_seg, moving_seg=fixed_mov, save_phi=False, device=device)
 
 net.train()
-custom_training(net, optimizer, num_epochs=200, fixed=target, moving=source, device=device)
+custom_training(net, optimizer, num_epochs=2000, fixed=target, moving=source, device=device)
 
 logger.info(f"After training...")
 net.eval()

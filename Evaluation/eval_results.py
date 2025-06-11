@@ -1,174 +1,164 @@
-from scipy.io import loadmat
 import numpy as np
-from scipy.ndimage import map_coordinates
-import matplotlib.pyplot as plt
+from scipy.io import loadmat
+from scipy.interpolate import interpn, RegularGridInterpolator
+import os
 
+dataset_path = 'Baseline/NIREP_Matlab/'
+patient = 2
 
-def compute_dsc_and_jaccard(segmentation, reference, num_labels=32):
-    dsc = np.zeros(num_labels)
-    to = np.zeros(num_labels)
-    jaccard = np.zeros(num_labels)
-    
-    for label in range(1, num_labels + 1):
-        seg_mask = (segmentation == label)
-        ref_mask = (reference == label)
-        intersection = np.logical_and(seg_mask, ref_mask).sum()
-        seg_vol = seg_mask.sum()
-        ref_vol = ref_mask.sum()
-        
-        if ref_vol + seg_vol > 0:
-            dsc[label - 1] = 2.0 * intersection / (ref_vol + seg_vol)
-        else:
-            dsc[label - 1] = np.nan 
-        
-        if ref_vol > 0:
-            to[label - 1] = intersection / ref_vol
-        else:
-            to[label - 1] = np.nan 
-        
-        if (2 - dsc[label - 1]) != 0:
-            jaccard[label - 1] = dsc[label - 1] / (2 - dsc[label - 1])
-        else:
-            jaccard[label - 1] = np.nan
-
-    mean_dsc = np.nanmean(dsc)
-    mean_jaccard = np.nanmean(jaccard)
-    return dsc, jaccard, to, mean_dsc, mean_jaccard
-
+# --- Cargar datos ---
 data = loadmat('results.mat')
 nirep01 = np.squeeze(data['nirep01'])
 nirep02 = np.squeeze(data['nirep02'])
 warped = np.squeeze(data['warped'])
-id_grid = data['id']
-disp = data['disp']
+id_data = data['id']
+disp_data = data['disp']
 
-# id tiene shape [1, 3, D, H, W]
-X = np.squeeze(id_grid[0, 1, :, :, :])  # MATLAB: id(1,2,:,:,:)
-Y = np.squeeze(id_grid[0, 0, :, :, :])  # MATLAB: id(1,1,:,:,:)
-Z = np.squeeze(id_grid[0, 2, :, :, :])  # MATLAB: id(1,3,:,:,:)
+print("nirep01 shape:", nirep01.shape)
+print("id_data shape:", id_data.shape)
+print("disp_data shape:", disp_data.shape)
 
-u = np.squeeze(disp[0, 1, :, :, :])     # disp(1,2,:,:,:)
-v = np.squeeze(disp[0, 0, :, :, :])     # disp(1,1,:,:,:)
-w = np.squeeze(disp[0, 2, :, :, :])     # disp(1,3,:,:,:)
+# Extraer coordenadas y desplazamientos igual que en MATLAB
+X = np.squeeze(id_data[0, 1, :, :, :]).astype(np.float32)
+Y = np.squeeze(id_data[0, 0, :, :, :]).astype(np.float32)
+Z = np.squeeze(id_data[0, 2, :, :, :]).astype(np.float32)
+u = np.squeeze(disp_data[0, 1, :, :, :]).astype(np.float32)
+v = np.squeeze(disp_data[0, 0, :, :, :]).astype(np.float32)
+w = np.squeeze(disp_data[0, 2, :, :, :]).astype(np.float32)
+
+print("X shape:", X.shape, "min/max:", X.min(), X.max())
+print("Y shape:", Y.shape, "min/max:", Y.min(), Y.max())
+print("Z shape:", Z.shape, "min/max:", Z.min(), Z.max())
+print("u shape:", u.shape, "min/max:", u.min(), u.max())
+print("v shape:", v.shape, "min/max:", v.min(), v.max())
+print("w shape:", w.shape, "min/max:", w.min(), w.max())
 
 XI = X + u
 YI = Y + v
 ZI = Z + w
 
-# Las coordenadas deben estar en orden (z, y, x) para map_coordinates
-coords = np.array([ZI.flatten(), YI.flatten(), XI.flatten()])
-wwarped = map_coordinates(nirep01, coords, order=1, mode='constant', cval=0.0)
-wwarped = wwarped.reshape(nirep01.shape)
+print("XI min/max:", XI.min(), XI.max())
+print("YI min/max:", YI.min(), YI.max())
+print("ZI min/max:", ZI.min(), ZI.max())
 
-fig, axs = plt.subplots(1, 2, figsize=(16, 4))
+XI_adj = XI + 1
+YI_adj = YI + 1
+ZI_adj = ZI + 1
 
-# Central slice index
-# Axial slice (z axis)
-z_idx = nirep01.shape[0] // 2
+print("XI_adj min/max:", XI_adj.min(), XI_adj.max())
+print("YI_adj min/max:", YI_adj.min(), YI_adj.max())
+print("ZI_adj min/max:", ZI_adj.min(), ZI_adj.max())
 
-axs[0].imshow(np.rot90(warped[:, :, z_idx]), cmap='gray', vmin=0, vmax=1)
-axs[0].set_title('warped (axial)')
-axs[0].axis('off')
+points = (np.arange(XI_adj.shape[0]), np.arange(XI_adj.shape[1]), np.arange(XI_adj.shape[2]))
 
-diff = np.abs(nirep02[:, :, z_idx] - warped[:, :, z_idx])
-axs[1].imshow(np.rot90(diff), cmap='gray', vmin=0, vmax=1)
-axs[1].set_title('nirep02 - warped (axial)')
-axs[1].axis('off')
+wwarped = interpn(
+    points,
+    nirep01,
+    np.stack((XI_adj.ravel(), YI_adj.ravel(), ZI_adj.ravel()), axis=-1),
+    method='linear',
+    bounds_error=False,
+    fill_value=0
+)
+wwarped = wwarped.reshape(XI.shape)
+print("wwarped shape:", wwarped.shape, "min/max:", wwarped.min(), wwarped.max())
 
-plt.tight_layout()
-plt.show()
-
-warp = np.zeros(XI.shape + (3,))
+warp = np.zeros((*XI.shape, 3), dtype=np.float32)
 warp[..., 0] = u
 warp[..., 1] = v
 warp[..., 2] = w
+print("warp shape:", warp.shape)
 
-# Plot the displacement field
-fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-axs[0].imshow(np.rot90(u[:, :, z_idx]), cmap='gray', vmin=-1, vmax=1)
-axs[0].set_title('Displacement u (axial)')
-axs[0].axis('off')
-axs[1].imshow(np.rot90(v[:, :, z_idx]), cmap='gray', vmin=-1, vmax=1)
-axs[1].set_title('Displacement v (axial)')
-axs[1].axis('off')
-axs[2].imshow(np.rot90(w[:, :, z_idx]), cmap='gray', vmin=-1, vmax=1)
-axs[2].set_title('Displacement w (axial)')
-axs[2].axis('off')
-plt.tight_layout()
-plt.show()
+# --- Cargar imágenes y segmentaciones ---
+moving_data = loadmat(os.path.join(dataset_path, 'NIREP_01-Sub.mat'))
+fixed_data = loadmat(os.path.join(dataset_path, f'NIREP_{patient:02d}-Sub.mat'))
+moving = moving_data['im']
+fixed = fixed_data['im']
 
-# Quiver plot (en un plano axial)
-# step = 2  # para menos flechas
-# plt.figure(figsize=(8, 8))
-# plt.imshow(np.rot90(nirep01[:, :, z_idx]), cmap='gray', vmin=0, vmax=1)
-# plt.quiver(
-#     Y[::step, ::step, z_idx], X[::step, ::step, z_idx],
-#     v[::step, ::step, z_idx], u[::step, ::step, z_idx],
-#     color='r', angles='xy', scale_units='xy', scale=1
-# )
-# plt.title('Displacement field (axial, quiver)')
-# plt.axis('off')
-# plt.show()
+print("moving shape:", moving.shape, "min/max:", moving.min(), moving.max())
+print("fixed shape:", fixed.shape, "min/max:", fixed.min(), fixed.max())
 
-# plt.figure(figsize=(8, 4))
-# plt.hist(u.flatten(), bins=50, alpha=0.5, label='u')
-# plt.hist(v.flatten(), bins=50, alpha=0.5, label='v')
-# plt.hist(w.flatten(), bins=50, alpha=0.5, label='w')
-# plt.legend()
-# plt.title('Histogram of displacement components')
-# plt.xlabel('Displacement')
-# plt.ylabel('Frequency')
-# plt.show()
+moving = (moving - moving.min()) / (moving.max() - moving.min())
+fixed = (fixed - fixed.min()) / (fixed.max() - fixed.min())
 
-# Línea central en el eje z
-# profile_warped = warped[:, :, z_idx].mean(axis=0)
-# profile_nirep02 = nirep02[:, :, z_idx].mean(axis=0)
-# plt.figure()
-# plt.plot(profile_warped, label='warped')
-# plt.plot(profile_nirep02, label='nirep02')
-# plt.title('Mean intensity profile (axial slice)')
-# plt.legend()
-# plt.show()
+seg_data = loadmat(os.path.join(dataset_path, 'NIREP_01-Seg.mat'))
+seg = seg_data['seg']
+ref_data = loadmat(os.path.join(dataset_path, f'NIREP_{patient:02d}-Seg.mat'))
+reference = ref_data['seg']
 
-# diff_3d = np.abs(nirep02 - warped)
-# plt.figure(figsize=(8, 4))
-# plt.imshow(np.max(diff_3d, axis=0), cmap='hot')
-# plt.title('Max projection of |nirep02 - warped| (Y-Z plane)')
-# plt.axis('off')
-# plt.show()
+print("seg shape:", seg.shape, "unique:", np.unique(seg))
+print("reference shape:", reference.shape, "unique:", np.unique(reference))
 
-# --NO TENGO MUY CLARO SI ESTO LO TENGO BIEN--
+# --- Ajustar tamaño del warp ---
+dim_s = seg.shape
+dim_p = warp.shape[:3]
+factor = np.array(dim_s) / np.array(dim_p)
+print("factor:", factor)
 
-id_grid = data['id']
-disp = data['disp']
-
-# Carga las segmentaciones (ajusta el path y formato según tus datos)
-dataset_path = 'Baseline/NIREP_Matlab/'
-seg = loadmat(dataset_path + 'NIREP_01-Seg.mat')['seg']  # Segmentación moving (NIREP_01)
-reference = loadmat(dataset_path + 'NIREP_02-Seg.mat')['seg']  # Segmentación reference (NIREP_02)
-
-output_shape = reference.shape  # (256, 300, 256)
-z, y, x = np.meshgrid(
-    np.arange(output_shape[0]),
-    np.arange(output_shape[1]),
-    np.arange(output_shape[2]),
-    indexing='ij'
+x_p = np.arange(dim_p[0])
+y_p = np.arange(dim_p[1])
+z_p = np.arange(dim_p[2])
+X_s, Y_s, Z_s = np.meshgrid(
+    np.arange(dim_s[0]), np.arange(dim_s[1]), np.arange(dim_s[2]), indexing='ij'
 )
+print("X_s shape:", X_s.shape)
 
-coords = np.array([
-    z + map_coordinates(u, [z, y, x], order=1, mode='nearest'),
-    y + map_coordinates(v, [z, y, x], order=1, mode='nearest'),
-    x + map_coordinates(w, [z, y, x], order=1, mode='nearest')
-])
+# Interpoladores para cada componente del campo de desplazamiento
+uu = np.zeros((*dim_s, 3), dtype=np.float32)
+for d in range(3):
+    interp = interpn(
+        (x_p, y_p, z_p),
+        warp[..., d] * factor[d],
+        np.stack((X_s.ravel() / factor[0], Y_s.ravel() / factor[1], Z_s.ravel() / factor[2]), axis=-1),
+        method='linear',
+        bounds_error=False,
+        fill_value=0
+    )
+    uu[..., d] = interp.reshape(dim_s)
+    print(f"uu[..., {d}] min/max:", uu[..., d].min(), uu[..., d].max())
 
-seg_warped = map_coordinates(seg, coords, order=0, mode='constant', cval=0)
-seg_warped = seg_warped.reshape(seg.shape)
+iphi = np.zeros((*dim_s, 3), dtype=np.float32)
+iphi[..., 0] = X_s + uu[..., 0]
+iphi[..., 1] = Y_s + uu[..., 1]
+iphi[..., 2] = Z_s + uu[..., 2]
+print("iphi shape:", iphi.shape)
+print("iphi[...,0] min/max:", iphi[...,0].min(), iphi[...,0].max())
+print("iphi[...,1] min/max:", iphi[...,1].min(), iphi[...,1].max())
+print("iphi[...,2] min/max:", iphi[...,2].min(), iphi[...,2].max())
 
-# Calcula DSC y Jaccard
-dsc, jaccard, to, mean_dsc, mean_jaccard = compute_dsc_and_jaccard(seg_warped, reference, num_labels=32)
+# --- Interpolación nearest para segmentación usando RegularGridInterpolator y redondeo ---
+seg = seg.astype(np.float32)
+interp_seg = RegularGridInterpolator(
+    (np.arange(dim_s[0]), np.arange(dim_s[1]), np.arange(dim_s[2])),
+    seg,
+    method='nearest',
+    bounds_error=False,
+    fill_value=0
+)
+coords = np.stack([iphi[..., 0].ravel(), iphi[..., 1].ravel(), iphi[..., 2].ravel()], axis=-1)
+coords_rounded = np.round(coords)
+print("coords_rounded shape:", coords_rounded.shape, "min/max:", coords_rounded.min(), coords_rounded.max())
+seg_w = interp_seg(coords_rounded)
+seg_w = seg_w.reshape(dim_s)
+print("seg_w shape:", seg_w.shape, "unique labels:", np.unique(seg_w))
 
-print("DSC por etiqueta:", dsc)
-print("Jaccard por etiqueta:", jaccard)
-print("To por etiqueta:", to)
-print("Mean DSC:", mean_dsc)
-print("Mean Jaccard:", mean_jaccard)
+# --- Calcular DSC y Jaccard ---
+dsc = []
+jaccard = []
+for label in range(1, 33):
+    ref_mask = (reference == label)
+    seg_mask = (seg_w == label)
+    inter = np.logical_and(ref_mask, seg_mask).sum()
+    ref_sum = ref_mask.sum()
+    seg_sum = seg_mask.sum()
+    if ref_sum + seg_sum > 0:
+        dsc_val = 2.0 * inter / (ref_sum + seg_sum)
+        dsc.append(dsc_val)
+        jaccard.append(dsc_val / (2 - dsc_val))
+        print(f"Label {label}: DSC={dsc_val:.4f}, Jaccard={jaccard[-1]:.4f}, ref={ref_sum}, seg={seg_sum}, inter={inter}")
+    else:
+        dsc.append(np.nan)
+        jaccard.append(np.nan)
+        print(f"Label {label}: No voxels in reference or segmentation.")
+
+print('Mean DSC:', np.nanmean(dsc))
+print('Mean Jaccard:', np.nanmean(jaccard))

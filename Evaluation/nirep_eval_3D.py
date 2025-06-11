@@ -166,6 +166,9 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
 
         for j, tar_bch in enumerate(trainloader):
 
+            if torch.equal(atlas_bch, tar_bch[0]):
+                continue
+
             print(f'Batch {j+1} / {len(trainloader)} ', end='\r')
 
             optimizer.zero_grad()

@@ -187,4 +187,4 @@ nirep/
 storage/
 Baseline/
 Evaluation/Geo-SIC-main_mhg
-*mat
+*.mat

@@ -188,3 +188,4 @@ storage/
 Baseline/
 Evaluation/Geo-SIC-main_mhg
 *.mat
+*.npy

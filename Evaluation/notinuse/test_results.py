@@ -4,7 +4,7 @@
 
 
 import config  # Este es el archivo que contiene todas las importaciones
-from evaluate_validation_test import load_all_data, convert_to_tensor, compute_segmentation
+from Evaluation.evaluate_validation_test import load_all_data, convert_to_tensor, compute_segmentation
 
 
 def plot_results(moving_image, fixed_image, moving_segmentation, fixed_segmentation, phi_inv, device):

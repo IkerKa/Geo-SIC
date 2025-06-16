@@ -12,10 +12,11 @@ def dice_coefficient(seg1, seg2):
     return 2. * intersection / (seg1.sum() + seg2.sum() + 1e-8)
 
 # Cargar los datos desde un .mat
-data = loadmat('results.mat')
+data = loadmat('results3.mat')
 
 # Extraer y eliminar dimensiones extra con squeeze
 nirep01 = np.squeeze(data['nirep01'])
+nirep02_img = np.squeeze(data['nirep02'])
 disp = data['disp']
 id_grid = data['id']
 
@@ -82,7 +83,7 @@ def plot_slices(image, title, cmap='gray'):
 # plot_slices(np.squeeze(data['warped']), 'Warp Field', cmap='gray')
 
 # Error between warped and original
-error = wwarped_np - nirep01
+error = wwarped_np - nirep02_img
 plot_slices(error, 'Error between Warped and Original', cmap='gray')
 # Error between wwarped and warped from data
 error_warped = wwarped_np - np.squeeze(data['warped'])
@@ -122,3 +123,66 @@ error_seg = warped_seg_np - nirep02
 plot_slices(error_seg, 'Error between Warped Segmentation and Reference', cmap='gray')
 print("Mean Absolute Error between warped segmentation and reference:", np.mean(np.abs(error_seg)))
 
+# -----------------------------
+# Visualizaciones adicionales
+# -----------------------------
+
+# 1. Overlay de Segmentaciones (Antes vs. Después)
+def plot_overlay(seg1, seg2, title):
+    plt.figure(figsize=(12, 4))
+    for i in range(3):
+        plt.subplot(1, 3, i + 1)
+        slice_idx = seg1.shape[2] // 2 + i - 1
+        plt.imshow(seg1[:, :, slice_idx], cmap='Reds', alpha=0.5)
+        plt.imshow(seg2[:, :, slice_idx], cmap='Blues', alpha=0.5)
+        plt.title(f'{title} Slice {i + 1}')
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+
+plot_overlay(warped_seg_np, nirep02, 'Overlay Warped vs Reference Segmentation')
+
+# 2. Magnitud del campo de deformación
+deformation_magnitude = np.sqrt(u**2 + v**2 + w**2)
+plot_slices(deformation_magnitude, 'Deformation Field Magnitude', cmap='viridis')
+
+
+
+#plotear nirep01, nirep02, warped, warp
+def plot_images(images, titles, cmap='gray'):
+    plt.figure(figsize=(15, 5))
+    for i, (img, title) in enumerate(zip(images, titles)):
+        plt.subplot(1, len(images), i + 1)
+        plt.imshow(img[:, :, img.shape[2] // 2], cmap=cmap)
+        plt.title(title)
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+plot_images(
+    [nirep01, nirep02_img, wwarped_np],
+    ['NIREP01', 'NIREP02', 'Warped Image'], 
+    cmap='gray'
+)
+
+# def dice_per_class(seg1, seg2, n_classes):
+#     for c in range(n_classes):
+#         dsc = dice_coefficient((seg1 == c), (seg2 == c))
+#         print(f'DSC clase {c}: {dsc:.4f}')
+# dice_per_class(warped_seg_np, nirep02, n_classes=3)
+
+def plot_contours(seg1, seg2, title):
+    from skimage import measure
+    plt.figure(figsize=(6,6))
+    slice_idx = seg1.shape[2] // 2
+    plt.imshow(seg2[:,:,slice_idx], cmap='gray', alpha=0.5)
+    for c in measure.find_contours(seg1[:,:,slice_idx], 0.5):
+        plt.plot(c[:, 1], c[:, 0], 'r', linewidth=2)
+    for c in measure.find_contours(seg2[:,:,slice_idx], 0.5):
+        plt.plot(c[:, 1], c[:, 0], 'b', linewidth=2)
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+plot_contours(warped_seg_np, nirep02, 'Contornos Warped (rojo) vs Reference (azul)')
+
+abs_diff = np.abs(warped_seg_np - nirep02)
+plot_slices(abs_diff, 'Mapa de diferencias absolutas', cmap='hot')

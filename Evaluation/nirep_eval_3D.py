@@ -166,8 +166,7 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
 
         for j, tar_bch in enumerate(trainloader):
 
-            if torch.equal(atlas_bch, tar_bch[0]):
-                continue
+            
 
             print(f'Batch {j+1} / {len(trainloader)} ', end='\r')
 
@@ -177,6 +176,8 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
             atlas_bch = atlas_bch.to(dev).float() 
             tar_bch_img = tar_bch[0].to(dev).float()
 
+            if torch.equal(atlas_bch, tar_bch[0].to(dev)):
+                continue
             # Train atlas building with extracted latent features
             pred = net(atlas_bch, tar_bch_img, registration=True, shooting = flag) 
 
@@ -233,6 +234,86 @@ def train_network(trainloader, aveloader, net, clfer, para, criterion, criterion
             'id': grid,
             'disp': pred[1].detach().cpu().numpy()
             })
+    
+
+import random
+def train_network_random(trainloader, aveloader, net, clfer, para, criterion, criterion_clf, num_classes, optimizer, scheduler, DistType, RegularityType, weight_dist, weight_reg, weight_latent, reduced_xDim, reduced_yDim, reduced_zDim, xDim, yDim, zDim, dev, flag):
+    """
+    Trains the atlas building neural network and classifier with random pairs.
+    """
+    running_loss = 0
+    total = 0
+    total_rmse = []
+
+    trainloader_list = list(trainloader)  # Convert to list for random access
+
+    for epoch in range(para.solver.epochs):
+        net.train()
+        clfer.train()
+        print('epoch:', epoch)
+
+        num_batches = len(trainloader_list)
+        for j in range(num_batches):
+            # Selecciona dos índices aleatorios distintos
+            idx1, idx2 = random.sample(range(num_batches), 2)
+            atlas_bch, _ = trainloader_list[idx1]
+            tar_bch = trainloader_list[idx2]
+
+            print(f'Batch {j+1} / {num_batches} ', end='\r')
+            optimizer.zero_grad()
+
+            atlas_bch = atlas_bch.to(dev).float()
+            tar_bch_img = tar_bch[0].to(dev).float()
+
+            # Train atlas building with extracted latent features
+            pred = net(atlas_bch, tar_bch_img, registration=True, shooting=flag)
+
+            # Train image classifier with feature fusion strategy
+            cl_pred = clfer(tar_bch_img, pred[2], weight_latent)
+
+            tar_bch_lbl = F.one_hot(torch.tensor(int(tar_bch[1][0])), num_classes).to(dev).float()
+            clf_loss = criterion_clf(cl_pred[0], tar_bch_lbl)
+
+            if flag == "SVF":
+                Dist = config.NCC().loss(pred[0], tar_bch_img)
+                Reg = config.Grad(penalty=RegularityType)
+                Reg_loss = Reg.loss(pred[1])
+                if epoch <= para.model.pretrain_epoch:
+                    loss_total = weight_dist * Dist + weight_reg * Reg_loss
+                else:
+                    loss_total = weight_dist * Dist + weight_reg * Reg_loss + clf_loss
+
+            loss_total.backward(retain_graph=True)
+            optimizer.step()
+            running_loss += loss_total.item()
+            total += running_loss
+            running_loss = 0.0
+
+        scheduler.step()
+        print('Total training loss:', total)
+
+        # rMSE for the 1-2 reference pair
+        # Use the same nirep01 and nirep02 as in the original code
+        pred = net(nirep01, nirep02, registration=True, shooting=flag)
+        mse = ((pred[0] - nirep02) ** 2).mean()
+        print("rMSE in baseline pair 1 - 2", (mse / mse0).item())
+        total_rmse.append((mse / mse0).item())
+
+    # create sampling grid
+    vectors = [torch.arange(0, s) for s in nirep01.shape[2:]]
+    grids = torch.meshgrid(vectors, indexing='ij')
+    grid = torch.stack(grids)
+    grid = torch.unsqueeze(grid, 0)
+    grid = grid.type(torch.FloatTensor)
+
+    savemat('results3.mat', {
+        'nirep01': nirep01.detach().cpu().numpy(),
+        'nirep02': nirep02.detach().cpu().numpy(),
+        'warped': pred[0].detach().cpu().numpy(),
+        'rmse': total_rmse,
+        'id': grid,
+        'disp': pred[1].detach().cpu().numpy()
+    })
 
 
 def main():
@@ -253,7 +334,7 @@ def main():
 
     net, clfer, criterion, criterion_clf, num_classes, optimizer, scheduler = initialize_network_optimizer(xDim, yDim, zDim, para, dev)
 
-    train_network(trainloader, aveloader, net, clfer, para, criterion, criterion_clf, num_classes, optimizer, scheduler, config.NCC, 'l2', 0.5, 0.5, 0.2, 16, 16, 16, xDim, yDim, zDim, dev, "SVF")
+    train_network_random(trainloader, aveloader, net, clfer, para, criterion, criterion_clf, num_classes, optimizer, scheduler, config.NCC, 'l2', 0.5, 0.5, 0.2, 16, 16, 16, xDim, yDim, zDim, dev, "SVF")
 
 if __name__ == "__main__":
     main()

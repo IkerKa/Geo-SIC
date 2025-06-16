@@ -1,5 +1,5 @@
 import config  # Este es el archivo que contiene todas las importaciones
-from evaluate_validation_test import exhaustive_train_model_with_validation, compute_segmentation, SpatialTransformer, compute_dice
+from Evaluation.evaluate_validation_test import exhaustive_train_model_with_validation, compute_segmentation, SpatialTransformer, compute_dice
 from Run_Atlas_trainer import initialize_network_optimizer, read_yaml
 
 import torch

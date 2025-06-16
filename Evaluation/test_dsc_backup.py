@@ -1,130 +1,124 @@
 import numpy as np
-import matplotlib.pyplot as plt
+from scipy.io import loadmat, savemat
 import torch
 import torch.nn.functional as F
 
-# Parámetros del volumen
-dim = 64
-sphere_radius = 0.4
-pixel_shift = 15
 
-# Crear rejilla 3D con coordenadas normalizadas
-coords_x, coords_y, coords_z = np.meshgrid(np.linspace(-1, 1, dim),
-                                          np.linspace(-1, 1, dim),
-                                          np.linspace(-1, 1, dim),
-                                          indexing='ij')
+def dice_coefficient(seg1, seg2):
+    """Calcula el Dice Similarity Coefficient entre dos segmentaciones binarias."""
+    seg1 = seg1.astype(np.bool_)
+    seg2 = seg2.astype(np.bool_)
+    intersection = np.logical_and(seg1, seg2).sum()
+    return 2. * intersection / (seg1.sum() + seg2.sum() + 1e-8)
 
-dist_from_center = np.sqrt(coords_x**2 + coords_y**2 + coords_z**2)
+# Cargar los datos desde un .mat
+data = loadmat('results.mat')
 
-# Volumen base: esfera binaria
-base_volume = (dist_from_center < sphere_radius).astype(float)
+# Extraer y eliminar dimensiones extra con squeeze
+nirep01 = np.squeeze(data['nirep01'])
+disp = data['disp']
+id_grid = data['id']
 
-# Segmentación: tres regiones concéntricas
-label_volume = np.zeros_like(dist_from_center, dtype=int)
-label_volume[dist_from_center < sphere_radius] = 1
-label_volume[dist_from_center < sphere_radius * 0.7] = 2
-label_volume[dist_from_center < sphere_radius * 0.4] = 3
+# Extraer coordenadas X, Y, Z desde 'id'
+X = np.squeeze(id_grid[0, 1, :, :, :])
+Y = np.squeeze(id_grid[0, 0, :, :, :])
+Z = np.squeeze(id_grid[0, 2, :, :, :])
 
-def apply_warp(volume, displacement_field, interp_mode='bilinear'):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    vol_tensor = torch.tensor(volume, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
-    disp_tensor = torch.tensor(displacement_field, dtype=torch.float32, device=device)
-    
-    nx, ny, nz = volume.shape
-    grid_x = torch.linspace(-1, 1, nx, device=device)
-    grid_y = torch.linspace(-1, 1, ny, device=device)
-    grid_z = torch.linspace(-1, 1, nz, device=device)
-    grid = torch.stack(torch.meshgrid(grid_x, grid_y, grid_z, indexing='ij'), dim=-1)
-    
-    # Escalar desplazamiento a [-1, 1]
-    scaled_disp = disp_tensor.clone()
-    scaled_disp[..., 0] = 2 * scaled_disp[..., 0] / (nx - 1)
-    scaled_disp[..., 1] = 2 * scaled_disp[..., 1] / (ny - 1)
-    scaled_disp[..., 2] = 2 * scaled_disp[..., 2] / (nz - 1)
-    
-    warped_grid = grid - scaled_disp
-    warped_grid = warped_grid.unsqueeze(0)
-    
-    warped = F.grid_sample(vol_tensor, warped_grid, mode=interp_mode,
-                           padding_mode='zeros', align_corners=False)
-    
-    return warped.squeeze().cpu().numpy()
+# Desplazamientos
+u = np.squeeze(disp[0, 1, :, :, :])
+v = np.squeeze(disp[0, 0, :, :, :])
+w = np.squeeze(disp[0, 2, :, :, :])
 
-# Desplazamiento constante solo en X
-displacement = np.zeros((dim, dim, dim, 3), dtype=np.float32)
-displacement[..., 0] = pixel_shift
+# Coordenadas deformadas
+XI = X + u
+YI = Y + v
+ZI = Z + w
 
-# Aplicar warp
-warped_vol = apply_warp(base_volume, displacement)
-warped_labels = apply_warp(label_volume.astype(float), displacement, interp_mode='nearest')
-warped_labels = np.round(warped_labels).astype(int)
+shape = disp.shape[2:]
 
-# Crear segmentación desplazada manualmente para referencia
-ref_labels = np.zeros_like(label_volume)
-shift_int = int(pixel_shift)
-ref_labels[shift_int:, :, :] = label_volume[:-shift_int, :, :]
+# Crear grid deformado para grid_sample
+XI = torch.from_numpy(XI)
+YI = torch.from_numpy(YI)
+ZI = torch.from_numpy(ZI)
+nnew_locs = torch.stack([YI, XI, ZI], dim=-1)  # (D, H, W, 3)
+nnew_locs = nnew_locs.permute(3,0,1,2).unsqueeze(0)  # (1, 3, D, H, W)
 
-def dice_coefficient(seg_a, seg_b, classes):
-    scores = []
-    for cls in classes:
-        if cls == 0:
-            continue
-        mask_a = (seg_a == cls)
-        mask_b = (seg_b == cls)
-        
-        valid_area = np.ones_like(seg_a, dtype=bool)
-        valid_area[:shift_int, :, :] = False
-        
-        intersection = np.sum(mask_a & mask_b & valid_area)
-        volume_sum = np.sum(mask_a & valid_area) + np.sum(mask_b & valid_area)
-        
-        score = (2 * intersection / volume_sum) if volume_sum > 0 else 0.0
-        scores.append(score)
-    return scores
+# Normalizar a [-1, 1] para grid_sample
+for i in range(len(shape)):
+    nnew_locs[:, i, ...] = 2 * (nnew_locs[:, i, ...] / (shape[i] - 1) - 0.5)
 
-# Visualizar resultados
-mid_slice = dim // 2
-plt.figure(figsize=(18, 12))
+# Cambiar a formato (N, D, H, W, 3) y revertir canales
+nnew_locs = nnew_locs.permute(0, 2, 3, 4, 1)
+nnew_locs = nnew_locs[..., [2, 1, 0]]
 
-plt.subplot(2, 3, 1)
-plt.imshow(label_volume[:, :, mid_slice], cmap='jet', vmin=0, vmax=3)
-plt.title('Segmentación Original')
-plt.axis('off')
+# Aplicar warping a la imagen nirep01 usando grid_sample
+nirep01_torch = torch.from_numpy(nirep01).float().unsqueeze(0).unsqueeze(0)  # (1,1,D,H,W)
+wwarped = F.grid_sample(nirep01_torch, nnew_locs, align_corners=True, mode='bilinear')
+wwarped_np = wwarped.squeeze().cpu().numpy()
 
-plt.subplot(2, 3, 2)
-plt.imshow(ref_labels[:, :, mid_slice], cmap='jet', vmin=0, vmax=3)
-plt.title('Segmentación Referencia')
-plt.axis('off')
+# Guardar la imagen deformada
+savemat('wwarped.mat', {'kk': wwarped_np})
 
-plt.subplot(2, 3, 3)
-plt.imshow(warped_labels[:, :, mid_slice], cmap='jet', vmin=0, vmax=3)
-plt.title('Segmentación Warp')
-plt.axis('off')
+# Crear el campo de deformación (warp)
+warp = np.zeros((*XI.shape, 3), dtype=np.float32)
+warp[..., 0] = u
+warp[..., 1] = v
+warp[..., 2] = w
 
-plt.subplot(2, 3, 4)
-plt.imshow(np.abs(label_volume[:, :, mid_slice] - ref_labels[:, :, mid_slice]), cmap='hot', vmin=0, vmax=3)
-plt.title('Diferencia Original - Ref')
-plt.axis('off')
+# Plot wwarped and warped from data
+import matplotlib.pyplot as plt
+def plot_slices(image, title, cmap='gray'):
+    plt.figure(figsize=(12, 4))
+    for i in range(3):
+        plt.subplot(1, 3, i + 1)
+        plt.imshow(image[:, :, image.shape[2] // 2 + i - 1], cmap=cmap)
+        plt.title(f'{title} Slice {i + 1}')
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
 
-plt.subplot(2, 3, 5)
-plt.imshow(np.abs(ref_labels[:, :, mid_slice] - warped_labels[:, :, mid_slice]), cmap='hot', vmin=0, vmax=3)
-plt.title('Diferencia Ref - Warp')
-plt.axis('off')
+# plot_slices(wwarped_np, 'Warped Image', cmap='gray')
+# plot_slices(nirep01, 'Original Image', cmap='gray')
+# plot_slices(np.squeeze(data['warped']), 'Warp Field', cmap='gray')
 
-classes = [1, 2, 3]
-dice_scores = dice_coefficient(ref_labels, warped_labels, classes)
+# Error between warped and original
+error = wwarped_np - nirep01
+plot_slices(error, 'Error between Warped and Original', cmap='gray')
+# Error between wwarped and warped from data
+error_warped = wwarped_np - np.squeeze(data['warped'])
+plot_slices(error_warped, 'Error between Warped and Data Warped', cmap='gray')
+print("Error between warped and original:", np.mean(np.abs(error)))
+print("Error between warped and data warped:", np.mean(np.abs(error_warped)))
 
-plt.subplot(2, 3, 6)
-plt.bar([f'Clase {c}' for c in classes], dice_scores, color=['blue', 'green', 'red'])
-plt.ylim(0, 1.1)
-plt.axhline(0.9, color='r', linestyle='--', label='Umbral 0.9')
-plt.legend()
-plt.title('DSC por Clase')
-plt.ylabel('Coeficiente DSC')
 
-plt.tight_layout()
-plt.show()
+# DSC calculation
+# Take the segmentations 
+datadir = 'Baseline/NIREP_Matlab/'
+nirep02 = loadmat(f'{datadir}/NIREP_02-Seg.mat')['seg']
+nirep01_seg = loadmat(f'{datadir}/NIREP_01-Seg.mat')['seg']
 
-print(f"\nDSC para desplazamiento de {pixel_shift} píxeles:")
-for c, sc in zip(classes, dice_scores):
-    print(f"Clase {c}: {sc:.4f}")
+# Warp the segmentation in the same way
+nirep01_seg_torch = torch.from_numpy(nirep01_seg).float().unsqueeze(0).unsqueeze(0)  # (1,1,D,H,W)
+warped_seg = F.grid_sample(nirep01_seg_torch, nnew_locs, align_corners=True, mode='nearest')
+warped_seg_np = warped_seg.squeeze().cpu().numpy()
+
+# Binarize warped segmentation (in case of interpolation artifacts)
+warped_seg_np = (warped_seg_np > 0.5).astype(np.uint8)
+
+
+from scipy.ndimage import zoom
+# Resample reference segmentation to match warped_seg shape if necessary
+if nirep02.shape != warped_seg_np.shape:
+    factors = [float(ws) / float(rs) for ws, rs in zip(warped_seg_np.shape, nirep02.shape)]
+    nirep02 = zoom(nirep02, factors, order=0)
+
+
+# Compute Dice Similarity Coefficient
+dsc = dice_coefficient(warped_seg_np, nirep02)
+print(f"Dice Similarity Coefficient (DSC): {dsc:.4f}")
+
+# Plot error between warped segmentation and reference
+error_seg = warped_seg_np - nirep02
+plot_slices(error_seg, 'Error between Warped Segmentation and Reference', cmap='gray')
+print("Mean Absolute Error between warped segmentation and reference:", np.mean(np.abs(error_seg)))
+

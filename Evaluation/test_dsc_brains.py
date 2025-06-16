@@ -4,32 +4,44 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from scipy.ndimage import zoom
+import nibabel as nib
 
-def warp_image_spatial_transformer(moving, displacement, mode='nearest'):
+def warp_image_spatial_transformer(moving, displacement, mode='bilinear'):
+    """
+    moving: numpy array (nx, ny, nz)
+    displacement: numpy array (nx, ny, nz, 3)
+    """
     import torch
     import torch.nn.functional as F
+
     moving_torch = torch.from_numpy(moving).unsqueeze(0).unsqueeze(0).float()
     disp_torch = torch.from_numpy(displacement).float()
-    nx, ny, nz = moving.shape
-    grid_x = torch.linspace(-1, 1, nx)
-    grid_y = torch.linspace(-1, 1, ny)
-    grid_z = torch.linspace(-1, 1, nz)
-    grid = torch.stack(torch.meshgrid(grid_x, grid_y, grid_z, indexing='ij'), dim=-1)
-    disp_norm = torch.zeros_like(disp_torch)
-    disp_norm[..., 0] = 2 * disp_torch[..., 0] / (nx - 1)
-    disp_norm[..., 1] = 2 * disp_torch[..., 1] / (ny - 1)
-    disp_norm[..., 2] = 2 * disp_torch[..., 2] / (nz - 1)
-    grid_disp = grid + disp_norm
-    grid_disp = grid_disp.unsqueeze(0)
-    grid_disp = grid_disp[..., [2,1,0]]
+    shape = moving.shape
+
+    # Construir grilla de coordenadas deformadas
+    grid = np.stack(np.meshgrid(
+        np.arange(shape[0]), np.arange(shape[1]), np.arange(shape[2]), indexing='ij'
+    ), axis=-1).astype(np.float32)  # (nx, ny, nz, 3)
+    new_locs = grid + displacement  # (nx, ny, nz, 3)
+
+    # Normalizar a [-1, 1]
+    for i in range(3):
+        new_locs[..., i] = 2 * (new_locs[..., i] / (shape[i] - 1) - 0.5)
+
+    # Convertir a torch y permutar ejes para grid_sample
+    new_locs = torch.from_numpy(new_locs).float()
+    new_locs = new_locs.unsqueeze(0)  # (1, nx, ny, nz, 3)
+    new_locs = new_locs[..., [2, 1, 0]]  # Revertir canales
+
     warped = F.grid_sample(
         moving_torch,
-        grid_disp,
+        new_locs,
         mode=mode,
-        padding_mode='zeros',  # Cambia aquí
-        align_corners=False
+        padding_mode='border',
+        align_corners=True  # ¡IMPORTANTE!
     )
     return warped.squeeze().cpu().numpy()
+
 
 def dice_coefficient(seg1, seg2):
     intersection = np.sum((seg1 > 0) & (seg2 > 0))
@@ -44,6 +56,13 @@ nirep_dir = 'Baseline/NIREP_Matlab/'
 seg1 = loadmat(f'{nirep_dir}/NIREP_01-Seg.mat')['seg']
 seg2 = loadmat(f'{nirep_dir}/NIREP_02-Seg.mat')['seg']
 warp = loadmat('results.mat')['disp']
+
+# dir = 'Evaluation'
+# seg_path = f'{dir}/na01_seg.nii.gz'
+# ref_path = f'{dir}/na02_seg.nii.gz'
+
+# seg1 = nib.load(seg_path).get_fdata()
+# seg2 = nib.load(ref_path).get_fdata()
 
 
 

@@ -2,10 +2,10 @@ import numpy as np
 from scipy.io import loadmat
 from scipy.interpolate import RegularGridInterpolator
 import torch
+import nibabel as nib
 import torch.nn.functional as F
 # Mostrar imágenes relevantes
 import matplotlib.pyplot as plt
-
 
 
 def warp_image_spatial_transformer(moving, displacement, mode='bilinear'):
@@ -13,36 +13,37 @@ def warp_image_spatial_transformer(moving, displacement, mode='bilinear'):
     moving: numpy array (nx, ny, nz)
     displacement: numpy array (nx, ny, nz, 3)
     """
-    moving_torch = torch.from_numpy(moving).unsqueeze(0).unsqueeze(0).float()  
-    disp_torch = torch.from_numpy(displacement).float()  
+    import torch
+    import torch.nn.functional as F
 
-    nx, ny, nz = moving.shape
+    moving_torch = torch.from_numpy(moving).unsqueeze(0).unsqueeze(0).float()
+    disp_torch = torch.from_numpy(displacement).float()
+    shape = moving.shape
 
-    # Crear grid normalizado [-1,1]
-    grid_x = torch.linspace(-1, 1, nx)
-    grid_y = torch.linspace(-1, 1, ny)
-    grid_z = torch.linspace(-1, 1, nz)
-    grid = torch.stack(torch.meshgrid(grid_x, grid_y, grid_z, indexing='ij'), dim=-1)  # 
+    # Construir grilla de coordenadas deformadas
+    grid = np.stack(np.meshgrid(
+        np.arange(shape[0]), np.arange(shape[1]), np.arange(shape[2]), indexing='ij'
+    ), axis=-1).astype(np.float32)  # (nx, ny, nz, 3)
+    new_locs = grid + displacement  # (nx, ny, nz, 3)
 
-    # Normalizar desplazamiento a [-1,1]
-    disp_norm = torch.zeros_like(disp_torch)
-    disp_norm[..., 0] = 2 * disp_torch[..., 0] / (nx - 1)
-    disp_norm[..., 1] = 2 * disp_torch[..., 1] / (ny - 1)
-    disp_norm[..., 2] = 2 * disp_torch[..., 2] / (nz - 1)
+    # Normalizar a [-1, 1]
+    for i in range(3):
+        new_locs[..., i] = 2 * (new_locs[..., i] / (shape[i] - 1) - 0.5)
 
-    grid_disp = grid + disp_norm  
-
-    grid_disp = grid_disp.unsqueeze(0)  
-    grid_disp = grid_disp[..., [2,1,0]]  
+    # Convertir a torch y permutar ejes para grid_sample
+    new_locs = torch.from_numpy(new_locs).float()
+    new_locs = new_locs.unsqueeze(0)  # (1, nx, ny, nz, 3)
+    new_locs = new_locs[..., [2, 1, 0]]  # Revertir canales
 
     warped = F.grid_sample(
         moving_torch,
-        grid_disp,
+        new_locs,
         mode=mode,
         padding_mode='border',
-        align_corners=False
+        align_corners=True  # ¡IMPORTANTE!
     )
     return warped.squeeze().cpu().numpy()
+
 
 def NIREP16_GeoSIC_DSC(patient, warp, warped):
     nirep_dir = 'Baseline/NIREP_Matlab/'
@@ -57,6 +58,15 @@ def NIREP16_GeoSIC_DSC(patient, warp, warped):
 
     seg = loadmat(f'{nirep_dir}/NIREP_01-Seg.mat')['seg']
     reference = loadmat(f'{nirep_dir}/NIREP_{patient:02d}-Seg.mat')['seg']
+
+    # Leer las na01 y na02 segmentaciones .nii.gz 
+    # Leer las segmentaciones .nii.gz
+    # dir = 'Evaluation'
+    # seg_path = f'{dir}/na01_seg.nii.gz'
+    # ref_path = f'{dir}/na02_seg.nii.gz'
+
+    # seg = nib.load(seg_path).get_fdata()
+    # reference = nib.load(ref_path).get_fdata()
 
     nwarp = np.zeros((nx, ny, nz, 3))
     nwarp[:nnx, :nny, :nnz, 0] = warp[:, :, :, 0]
@@ -76,13 +86,13 @@ def NIREP16_GeoSIC_DSC(patient, warp, warped):
     dim_p = warp.shape[:3]
     factor = np.array(dim_s) / np.array(dim_p)
 
-    xs = np.arange(1, dim_s[0]+1)
-    ys = np.arange(1, dim_s[1]+1)
-    zs = np.arange(1, dim_s[2]+1)
+    xs = np.arange(dim_s[0])
+    ys = np.arange(dim_s[1])
+    zs = np.arange(dim_s[2])
 
-    xp = np.arange(1, dim_p[0]+1)
-    yp = np.arange(1, dim_p[1]+1)
-    zp = np.arange(1, dim_p[2]+1)
+    xp = np.arange(dim_p[0])
+    yp = np.arange(dim_p[1])
+    zp = np.arange(dim_p[2])
 
     Xs, Ys, Zs = np.meshgrid(xs, ys, zs, indexing='ij')
     Xs_warp = Xs / factor[0]
@@ -120,11 +130,13 @@ def NIREP16_GeoSIC_DSC(patient, warp, warped):
     ], axis=-1)
     segmentation = interp_seg(points_seg).reshape(seg.shape)
 
-    dsc = np.zeros(32)
-    Jaccard = np.zeros(32)
-    to = np.zeros(32)
+    dsc = np.zeros(33)
+    Jaccard = np.zeros(33)
+    to = np.zeros(33)
 
-    for label in range(1, 33):
+    print("Total labels in segmentation:", np.unique(segmentation))
+
+    for label in range(1, 34):  # Labels from 1 to 33
         ref_mask = (reference == label)
         seg_mask = (segmentation == label)
 
@@ -140,8 +152,67 @@ def NIREP16_GeoSIC_DSC(patient, warp, warped):
 
     Jaccard = dsc / (2 - dsc)
 
-    return dsc, Jaccard, to, warped_img
+    # Plot both segmentation and warped segmentation
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.imshow(segmentation[:, :, nz // 2], cmap='gray')
+    plt.title('Segmentación Warped')
+    plt.axis('off')
+    plt.subplot(1, 2, 2)
+    plt.imshow(reference[:, :, nz // 2], cmap='gray')
+    plt.title('Segmentación de Referencia')
+    plt.axis('off')
+    plt.suptitle(f'Comparación de Segmentaciones (Paciente {patient})')
+    plt.show()
 
+    # Resample the segmentation to match the warped image dimensions
+    from scipy.ndimage import zoom
+
+    if seg.shape != warp.shape[:3]:
+        # Calcula el factor de escala para cada dimensión
+        factors = [n / float(s) for n, s in zip(warp.shape[:3], seg.shape)]
+        seg_resampled = zoom(seg, factors, order=0)  # order=0 para nearest neighbor
+    else:
+        seg_resampled = seg
+
+    warped_seg = warp_image_spatial_transformer(seg_resampled, warp, mode='nearest')
+    warped_seg = warped_seg.astype(np.uint8)
+
+    # Visualiza la segmentación deformada y la referencia
+    slice_idx = warped_seg.shape[2] // 2
+
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.imshow(warped_seg[:, :, slice_idx], cmap='tab20')
+    plt.title('Segmentación Warped')
+    plt.axis('off')
+    plt.subplot(1, 2, 2)
+    plt.imshow(reference[:, :, slice_idx], cmap='tab20')
+    plt.title('Segmentación de Referencia')
+    plt.axis('off')
+    plt.suptitle('Comparación de Segmentaciones (corte axial)')
+    plt.show()
+
+    # Error of warped_Segmentation with the reference segmentation
+    # Resample reference to match warped_seg shape if necessary
+    if reference.shape != warped_seg.shape:
+        from scipy.ndimage import zoom
+        factors = [float(ws) / float(rs) for ws, rs in zip(warped_seg.shape, reference.shape)]
+        reference_resampled = zoom(reference, factors, order=0)
+    else:
+        reference_resampled = reference
+
+    error = warped_seg - reference_resampled
+    plt.figure(figsize=(8, 4))
+    plt.imshow(error[:, :, slice_idx], cmap='gray')
+    plt.title('Error Absoluto entre Segmentaciones')
+    plt.axis('off')
+    plt.colorbar()
+    plt.show()
+    
+
+
+    return dsc, Jaccard, to, warped_img
 
 
 data = loadmat('results.mat')

@@ -9,13 +9,10 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
-# Configuración de estilo para los gráficos
-sns.set(style='whitegrid', palette='muted')
-# Configuración de matplotlib para evitar problemas con el backend
-plt.switch_backend('agg')  # Cambiar a un backend no interactivo
 # =============================================================================
 
 # Configuración inicial
+dir = 'fixed_pairs_results'
 result_files = {
     1: 'results1.mat',
     50: 'results2.mat',

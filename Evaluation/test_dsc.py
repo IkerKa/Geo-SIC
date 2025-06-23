@@ -12,7 +12,7 @@ def dice_coefficient(seg1, seg2):
     return 2. * intersection / (seg1.sum() + seg2.sum() + 1e-8)
 
 # Cargar los datos desde un .mat
-data = loadmat('results3.mat')
+data = loadmat('fixed_pair_results/results3.mat')
 
 # Extraer y eliminar dimensiones extra con squeeze
 nirep01 = np.squeeze(data['nirep01'])
